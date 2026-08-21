@@ -1117,6 +1117,83 @@ DEFAULT_MIRROR_IDENTITY = {
     "email": "akashparmar93@users.noreply.github.com",
 }
 
+# Publishing crosses a private -> public boundary, and it has gone wrong before:
+# the initial commit vendored an `impeccable` that hardcoded C:/Users/<name>.
+# Once a GitHub Action publishes automatically there is no human reading the
+# diff, so the scan below is the only thing left standing at that boundary.
+#
+# Patterns are structural on purpose. Listing the actual private strings would
+# put them in bin/skillctl, which is itself published — the guard would leak
+# exactly what it guards.
+SAFE_EMAIL_DOMAINS = (
+    "example.com", "example.org", "example.net", "test.com", "test.local",
+    "users.noreply.github.com", "noreply.github.com", "anthropic.com",
+)
+
+LEAK_PATTERNS = [
+    ("email address", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
+    ("home directory path", re.compile(r"(?:/Users/|/home/|C:[\\/]Users[\\/])[A-Za-z0-9._-]+")),
+    ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY")),
+    ("credential", re.compile(r"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"
+                              r"|github_pat_[A-Za-z0-9_]{20,}"
+                              r"|sk-ant-[A-Za-z0-9-]{20,}"
+                              r"|AKIA[0-9A-Z]{16}")),
+]
+
+# Generic placeholders that are not leaks: the component after /Users/ etc. is
+# either elided ("/Users/.../hook.mjs", as impeccable's comments write it) or a
+# stand-in name no real machine carries.
+SAFE_PATH_COMPONENTS = frozenset(
+    ["user", "you", "username", "youruser", "yourname", "me", "name", "home"])
+
+
+def mirror_slug(url):
+    """owner/repo from a mirror URL, in either https or ssh form.
+
+    The workflow passes the ssh form so its deploy key is used, so this cannot
+    just strip an https prefix — doing that put a whole `git@github.com:...`
+    URL into the generated README, where the leak scan then flagged it as an
+    email address and failed the first CI run.
+    """
+    m = re.search(r"[:/]([^/:]+/[^/:]+?)(?:\.git)?/?$", url)
+    return m.group(1) if m else url
+
+
+def _placeholder_path(hit):
+    """True when a matched path names nobody — a stand-in, not a real account."""
+    comp = re.split(r"[\\/]", hit)[-1]
+    if not comp or comp in ("Users", "home"):
+        return True
+    if re.fullmatch(r"[.<>{}$_-]+", comp):        # /Users/... or C:\Users\<you>
+        return True
+    return comp.lower() in SAFE_PATH_COMPONENTS
+
+
+def scan_for_leaks(root):
+    """Find personal data in a tree about to be published. Returns findings."""
+    found = []
+    for rel, ap in sorted(walk_files(root).items()):
+        try:
+            with open(ap, "r", errors="ignore") as f:
+                text = f.read()
+        except OSError:
+            continue
+        for label, pat in LEAK_PATTERNS:
+            for hit in set(pat.findall(text)):
+                if label == "email address":
+                    if hit.rsplit("@", 1)[-1].lower() in SAFE_EMAIL_DOMAINS:
+                        continue
+                    # `git@github.com:owner/repo` is an ssh remote, not a
+                    # person. The mirror URL itself is written in that form.
+                    if hit.lower().startswith("git@"):
+                        continue
+                elif label == "home directory path":
+                    if _placeholder_path(hit):
+                        continue
+                found.append((rel, label, hit))
+    return found
+
+
 MIRROR_README = """# claude-skills-dist
 
 Public, generated distribution of my Claude Code skills. **Do not edit or open
@@ -1211,9 +1288,22 @@ def cmd_publish(args):
         _publish_tree(clone)
         with open(os.path.join(clone, "README.md"), "w") as f:
             f.write(MIRROR_README % {
-                "mirror_repo": mirror.rstrip("/").replace("https://github.com/", ""),
+                "mirror_repo": mirror_slug(mirror),
                 "count": len(m["skills"]),
             })
+
+        leaks = [] if args.skip_leak_scan else scan_for_leaks(clone)
+        if leaks:
+            print(red("  refusing to publish — personal data in the tree:"))
+            for rel, label, hit in leaks[:20]:
+                print(red("    %s" % rel) + dim("  %s: " % label) + hit)
+            if len(leaks) > 20:
+                print(dim("    … and %d more" % (len(leaks) - 20)))
+            die("%d finding(s). Fix them, or re-run with --skip-leak-scan if every "
+                "one is a\n  false positive — this repo is private and the mirror "
+                "is not." % len(leaks))
+        if args.skip_leak_scan:
+            print(yellow("  leak scan skipped"))
 
         subprocess.run(["git", "-C", clone, "add", "-A"], check=True)
         staged = subprocess.run(["git", "-C", clone, "diff", "--cached", "--stat"],
@@ -1308,6 +1398,8 @@ def main():
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--allow-dirty", action="store_true",
                    help="publish even though this repo has uncommitted changes")
+    s.add_argument("--skip-leak-scan", action="store_true",
+                   help="publish despite the personal-data scan (last resort)")
     s.set_defaults(fn=cmd_publish)
 
     s = sub.add_parser("seal", help="recompute manifest hashes from repo contents")
