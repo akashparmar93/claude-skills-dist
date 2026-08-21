@@ -868,6 +868,36 @@ def fm_field(block, key):
     return value.strip().strip('"\'')
 
 
+# Markdown links, tolerating <angle brackets> and a "title" after the target.
+MD_LINK = re.compile(r'\[[^\]]*\]\(\s*<?([^)>\s]+)>?')
+
+
+def dangling_links(skill_dir):
+    """Relative links in SKILL.md pointing at files that are not there.
+
+    Pinning is only worth anything if what lands in skills/ is what agents get.
+    An `include` list narrower than what SKILL.md references produces a skill
+    that registers, lints green, and breaks the moment an agent follows a link
+    — which is how code-review-skill shipped with three dead ones. Targets
+    resolve against the skill directory, so `../other/file.md` is valid: skills
+    install side by side, and that is how they cross-reference each other.
+    """
+    path = os.path.join(skill_dir, "SKILL.md")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return []          # a missing SKILL.md is cmd_lint's error, not this one
+    missing = []
+    for target in MD_LINK.findall(text):
+        rel = target.split("#", 1)[0]
+        if not rel or "://" in rel or rel.startswith("mailto:"):
+            continue
+        if not os.path.exists(os.path.join(skill_dir, rel)) and rel not in missing:
+            missing.append(rel)
+    return sorted(missing)
+
+
 def cmd_lint(args):
     """Catch problems that stop a skill registering or triggering correctly.
 
@@ -907,6 +937,11 @@ def cmd_lint(args):
             if len(desc) > 700:
                 warnings.append((name, "description is %d chars; very long descriptions "
                                        "dilute the trigger" % len(desc)))
+
+        for rel in dangling_links(d):
+            errors.append((name, "SKILL.md links to '%s', which is not there — "
+                                 "widen the skill's `include` globs and re-vendor"
+                           % rel))
 
     if os.path.isdir(SKILLS_SRC):
         for d in sorted(os.listdir(SKILLS_SRC)):
