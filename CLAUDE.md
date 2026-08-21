@@ -45,7 +45,7 @@ does not name one.
 
 - Skill descriptions alone have not reliably triggered activation; this table is
   the mechanism, so prefer it over waiting for a description to match.
-- Skills are symlinks into `~/Documents/Claude/claude-skills`, which is the
+- Skills are symlinks into `~/Documents/Claude/Skills`, which is the
   single source of truth across all my devices. Edit skills there, never in
   `~/.claude/skills`. See that repo's `SETUP.md`.
 - In a Claude Code **cloud** session the symlinks point at

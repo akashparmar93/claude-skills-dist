@@ -173,6 +173,15 @@ def gh(url):
         return urllib.request.urlopen(req, timeout=60).read()
     except urllib.error.HTTPError as e:
         if e.code in (403, 429):
+            if IS_CLOUD:
+                # Not a rate limit. A cloud session's GitHub API access is
+                # restricted to the repos attached to that session, so any
+                # upstream request 403s no matter how long you wait — and the
+                # injected GITHUB_TOKEN is the literal string "proxy-injected".
+                die("upstream GitHub API is not reachable from a Claude Code cloud "
+                    "session.\n  API access is scoped to this session's own repos, so "
+                    "checking third-party\n  upstreams 403s regardless of waiting. Run "
+                    "`check` / `diff` / `vendor` on a\n  real device instead.\n  %s" % url)
             hint = ("You are unauthenticated (60 requests/hr). Install and run `gh auth login`, "
                     "or export GITHUB_TOKEN, to get 5000/hr."
                     if not api_token() else
