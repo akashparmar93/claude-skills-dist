@@ -1,0 +1,249 @@
+{
+  "install_dir": "~/.claude/skills",
+  "mirror": "https://github.com/akashparmar93/claude-skills-dist",
+  "skills": {
+    "brainstorming": {
+      "hash": "sha256:5e6e91b078faa0029407be720134a4b0cc9636612600e418adbf56ea9772f453",
+      "origin": {
+        "path": "skills/brainstorming",
+        "ref": "main",
+        "repo": "obra/superpowers"
+      },
+      "pin": {
+        "commit": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "ref": "main"
+      }
+    },
+    "caveman": {
+      "hash": "sha256:807c077adf019c0d9366e07e32cce7687c655f5a5828353f2498b809e105f87a",
+      "origin": {
+        "path": "skills/caveman",
+        "ref": "main",
+        "repo": "JuliusBrussee/caveman"
+      },
+      "pin": {
+        "commit": "ec83e5bace4c20484d704dea21e12fc4eb94e9aa",
+        "ref": "main"
+      }
+    },
+    "caveman-help": {
+      "hash": "sha256:7d13970a328fc87e7f92dedc8cbf5944ec8a8f0b55276b54dfcdce15a371e033",
+      "origin": {
+        "path": "skills/caveman-help",
+        "ref": "main",
+        "repo": "JuliusBrussee/caveman"
+      },
+      "pin": {
+        "commit": "ec83e5bace4c20484d704dea21e12fc4eb94e9aa",
+        "ref": "main"
+      }
+    },
+    "code-review-skill": {
+      "hash": "sha256:b37d7ff2d76996bf44f23393fc280ebaed4936eab72bab68455d42989ab4a872",
+      "origin": {
+        "include": [
+          "SKILL.md",
+          "assets/*",
+          "reference/*",
+          "scripts/*"
+        ],
+        "path": "",
+        "ref": "main",
+        "repo": "awesome-skills/code-review-skill"
+      },
+      "pin": {
+        "commit": "95c707b999295f6c8ee2d0d3d1c61cc0c2e1a52c",
+        "ref": "main"
+      }
+    },
+    "dispatching-parallel-agents": {
+      "hash": "sha256:1acb899b23c2bdb5af5961e7b97ba43fb2a5593822db755747ef3d5db9f825a4",
+      "origin": {
+        "path": "skills/dispatching-parallel-agents",
+        "ref": "main",
+        "repo": "obra/superpowers"
+      },
+      "pin": {
+        "commit": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "ref": "main"
+      }
+    },
+    "executing-plans": {
+      "hash": "sha256:5036191743cbb55b8665ddf0d6b89daad668525adf28291fe1054e86e01972d9",
+      "origin": {
+        "path": "skills/executing-plans",
+        "ref": "main",
+        "repo": "obra/superpowers"
+      },
+      "pin": {
+        "commit": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "ref": "main"
+      }
+    },
+    "finishing-a-development-branch": {
+      "hash": "sha256:1fbb4cc3d58f7892dd9ac7690c569261a71d7a84a0057bb78566978108cef4c5",
+      "origin": {
+        "path": "skills/finishing-a-development-branch",
+        "ref": "main",
+        "repo": "obra/superpowers"
+      },
+      "pin": {
+        "commit": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "ref": "main"
+      }
+    },
+    "impeccable": {
+      "hash": "sha256:18aaad440bb9887b29167f326cd0d8c1873e105e324c793e2d447681312c5630",
+      "origin": {
+        "path": ".claude/skills/impeccable",
+        "ref": "main",
+        "repo": "pbakaus/impeccable"
+      },
+      "pin": {
+        "commit": "620ba1fe7d87a39039a8528bfaa319ecfa893cb2",
+        "ref": "main"
+      }
+    },
+    "karpathy-guidelines": {
+      "hash": "sha256:5e8a1677df986d47abaf3d42f1ce0c7427ea030f50370c52baf9ba1e2c7c3db9",
+      "origin": {
+        "path": "skills/karpathy-guidelines",
+        "ref": "main",
+        "repo": "multica-ai/andrej-karpathy-skills"
+      },
+      "pin": {
+        "commit": "2c606141936f1eeef17fa3043a72095b4765b9c2",
+        "ref": "main"
+      }
+    },
+    "receiving-code-review": {
+      "hash": "sha256:e5dd23be2d93f751c8b28d647c4b139754aedfe75648cd8e1100e47f5da0c3c5",
+      "origin": {
+        "path": "skills/receiving-code-review",
+        "ref": "main",
+        "repo": "obra/superpowers"
+      },
+      "pin": {
+        "commit": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "ref": "main"
+      }
+    },
+    "requesting-code-review": {
+      "hash": "sha256:0f41514c70ea491d649aaff72c9c82adce333a674b33c1f2983a98f9e196803d",
+      "origin": {
+        "path": "skills/requesting-code-review",
+        "ref": "main",
+        "repo": "obra/superpowers"
+      },
+      "pin": {
+        "commit": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "ref": "main"
+      }
+    },
+    "roast": {
+      "hash": "sha256:7bded07c1ede43ce331ecece8ca6d26e5a873316f9beab4a426153bc3c07b605",
+      "origin": null
+    },
+    "security-review-checklist": {
+      "hash": "sha256:7611615d99e9717e5f3478155a342cdca92518c008ae0cd97f6984d78169d3ab",
+      "origin": null
+    },
+    "subagent-driven-development": {
+      "hash": "sha256:3a6c25ff1b43e1c882c474acb54adf4fd2d719628582f76da4586424da46b96b",
+      "origin": {
+        "path": "skills/subagent-driven-development",
+        "ref": "main",
+        "repo": "obra/superpowers"
+      },
+      "pin": {
+        "commit": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "ref": "main"
+      }
+    },
+    "systematic-debugging": {
+      "hash": "sha256:e4263f70f52de0286442ea874f8d10c874b65e8e08af20595b6b241d996915f5",
+      "origin": {
+        "path": "skills/systematic-debugging",
+        "ref": "main",
+        "repo": "obra/superpowers"
+      },
+      "pin": {
+        "commit": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "ref": "main"
+      }
+    },
+    "test-driven-development": {
+      "hash": "sha256:0ff8639af929add22342c8fbd7accfd26529c64c9998e2b65e78dfe73e19b48c",
+      "origin": {
+        "path": "skills/test-driven-development",
+        "ref": "main",
+        "repo": "obra/superpowers"
+      },
+      "pin": {
+        "commit": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "ref": "main"
+      }
+    },
+    "using-git-worktrees": {
+      "hash": "sha256:98dc7da4ead1fe3c523c7ac314082f1f85114ad5e6ec39d4426b4a7f76ed9d0c",
+      "origin": {
+        "path": "skills/using-git-worktrees",
+        "ref": "main",
+        "repo": "obra/superpowers"
+      },
+      "pin": {
+        "commit": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "ref": "main"
+      }
+    },
+    "using-superpowers": {
+      "hash": "sha256:53c4239df21b152fc1cffce0b16dee01e46c45a51b92231b97a71cd582caa80e",
+      "origin": {
+        "path": "skills/using-superpowers",
+        "ref": "main",
+        "repo": "obra/superpowers"
+      },
+      "pin": {
+        "commit": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "ref": "main"
+      }
+    },
+    "verification-before-completion": {
+      "hash": "sha256:d8a53168f152b6163bd3447f7d4c20b6b4cddf6bd907f9aa5856b514c032db0e",
+      "origin": {
+        "path": "skills/verification-before-completion",
+        "ref": "main",
+        "repo": "obra/superpowers"
+      },
+      "pin": {
+        "commit": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "ref": "main"
+      }
+    },
+    "writing-plans": {
+      "hash": "sha256:b2c043f104d972a8a843ab3b3b31ac2280a4fac3db6af2b1d66bbd8e392e863f",
+      "origin": {
+        "path": "skills/writing-plans",
+        "ref": "main",
+        "repo": "obra/superpowers"
+      },
+      "pin": {
+        "commit": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "ref": "main"
+      }
+    },
+    "writing-skills": {
+      "hash": "sha256:ab1277cb61c94df65aa187f23c7db8d6dbbb94a1a018d8f7082f011602976cf1",
+      "origin": {
+        "path": "skills/writing-skills",
+        "ref": "main",
+        "repo": "obra/superpowers"
+      },
+      "pin": {
+        "commit": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "ref": "main"
+      }
+    }
+  },
+  "version": 1
+}

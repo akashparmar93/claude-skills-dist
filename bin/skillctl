@@ -1,0 +1,1315 @@
+#!/usr/bin/env python3
+"""skillctl - single source of truth for Claude Code skills across devices.
+
+The repo containing this script is the source of truth. skills.json declares
+which skills should exist, where each came from, and which upstream commit it
+is pinned to. Each device symlinks ~/.claude/skills/<name> into skills/<name>
+here, so `git pull` is the whole update mechanism.
+
+  skillctl status            where this device stands (local, no network)
+  skillctl sync              make ~/.claude/skills match the manifest
+  skillctl check             which vendored skills have upstream updates
+  skillctl diff  <name>      what changed upstream since the pin
+  skillctl vendor <name>     pull upstream in and re-pin
+  skillctl adopt  <name>     bring an unmanaged local skill into the repo
+
+Python 3.9+, standard library only.
+"""
+
+import argparse
+import fnmatch
+import hashlib
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import urllib.error
+import urllib.request
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MANIFEST = os.path.join(REPO, "skills.json")
+SKILLS_SRC = os.path.join(REPO, "skills")
+INSTALL_DIR = os.path.expanduser("~/.claude/skills")
+# Deliberately NOT under INSTALL_DIR: Claude Code loads every directory there as
+# a skill, so a backup kept alongside its original would be loaded as a second,
+# near-identical skill — doubling context and making activation ambiguous.
+BACKUP_DIR = os.path.expanduser("~/.claude/skillctl-backups")
+IGNORE = {".DS_Store", ".git", "__pycache__", ".in_use"}
+
+# A Claude Code cloud container is not a device we own. Its ~/.claude/skills
+# always holds directories we did not put there — `synced/` from account-level
+# skill sync, plus whatever ships in the base image. Those are not candidates
+# for `adopt`, so counting them as unmanaged would make `status` exit non-zero
+# on every cloud session and destroy the "exit 0 = in sync" contract.
+IS_CLOUD = os.environ.get("CLAUDE_CODE_REMOTE") == "true"
+
+# What `skillctl publish` copies into the public mirror. Everything else stays
+# private: OPEN.md and SETUP.md carry device names, a private repo name and an
+# email address, and eval/ and setup-shell have no role on a cloud box.
+PUBLISH_PATHS = ["skills", "skills.json", "CLAUDE.md",
+                 "bin/skillctl", "bin/cloud-setup.sh", "bin/cloud-sync.sh"]
+
+# ---------------------------------------------------------------- terminal ---
+
+_TTY = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+
+def c(code, s):
+    return "\033[%sm%s\033[0m" % (code, s) if _TTY else s
+
+
+def green(s):
+    return c("32", s)
+
+
+def red(s):
+    return c("31", s)
+
+
+def yellow(s):
+    return c("33", s)
+
+
+def dim(s):
+    return c("2", s)
+
+
+def bold(s):
+    return c("1", s)
+
+
+def die(msg):
+    print(red("error: ") + msg, file=sys.stderr)
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------- manifest ---
+
+
+def load_manifest():
+    if not os.path.exists(MANIFEST):
+        die("no skills.json at %s (run: skillctl init)" % MANIFEST)
+    with open(MANIFEST) as f:
+        return json.load(f)
+
+
+def save_manifest(m):
+    with open(MANIFEST, "w") as f:
+        json.dump(m, f, indent=2, sort_keys=True)
+        f.write("\n")
+
+
+# ------------------------------------------------------------------ hashing ---
+
+
+def git_blob_sha(path):
+    """Git's own blob hash, so we can compare against GitHub trees for free."""
+    with open(path, "rb") as f:
+        data = f.read()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def walk_files(root):
+    """Relative path -> absolute path, for every real file under root."""
+    out = {}
+    if not os.path.isdir(root):
+        return out
+    for base, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in IGNORE]
+        for fn in files:
+            if fn in IGNORE:
+                continue
+            ap = os.path.join(base, fn)
+            out[os.path.relpath(ap, root)] = ap
+    return out
+
+
+def tree_hash(root):
+    """Content hash of a directory: stable across machines, ignores mtime."""
+    h = hashlib.sha256()
+    files = walk_files(root)
+    for rel in sorted(files):
+        h.update(rel.encode() + b"\0")
+        with open(files[rel], "rb") as f:
+            h.update(f.read())
+        h.update(b"\0")
+    return "sha256:" + h.hexdigest()
+
+
+def matches(rel, include, exclude):
+    if exclude and any(fnmatch.fnmatch(rel, p) for p in exclude):
+        return False
+    if include:
+        return any(fnmatch.fnmatch(rel, p) for p in include)
+    return True
+
+
+# ------------------------------------------------------------------ network ---
+
+
+def api_token():
+    """Env first, then the gh CLI keyring. Never written to disk by skillctl."""
+    tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if tok:
+        return tok
+    try:
+        out = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=10)
+        return out.stdout.strip() or None
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+
+def gh(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "skillctl", "Accept": "application/vnd.github+json"})
+    tok = api_token()
+    if tok:
+        req.add_header("Authorization", "Bearer " + tok)
+    try:
+        return urllib.request.urlopen(req, timeout=60).read()
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 429):
+            hint = ("You are unauthenticated (60 requests/hr). Install and run `gh auth login`, "
+                    "or export GITHUB_TOKEN, to get 5000/hr."
+                    if not api_token() else
+                    "Authenticated but still limited — wait for the window to reset.")
+            die("GitHub rate limit hit. %s\n  %s" % (hint, url))
+        raise
+
+
+def resolve_ref(repo, ref):
+    """ref (branch/tag/sha) -> concrete commit sha."""
+    data = json.loads(gh("https://api.github.com/repos/%s/commits/%s" % (repo, ref)))
+    return data["sha"]
+
+
+_tree_cache = {}
+
+
+def upstream_tree(repo, sha):
+    """{relpath: git blob sha} for an entire repo at a commit."""
+    key = (repo, sha)
+    if key not in _tree_cache:
+        data = json.loads(gh("https://api.github.com/repos/%s/git/trees/%s?recursive=1" % (repo, sha)))
+        if data.get("truncated"):
+            die("tree for %s@%s is truncated; repo too large for the API path" % (repo, sha[:8]))
+        _tree_cache[key] = {t["path"]: t["sha"] for t in data.get("tree", []) if t["type"] == "blob"}
+    return _tree_cache[key]
+
+
+def upstream_files(origin, sha):
+    """{relpath (relative to the skill root): blob sha} honouring path/include/exclude."""
+    tree = upstream_tree(origin["repo"], sha)
+    sub = origin.get("path", "").strip("/")
+    prefix = sub + "/" if sub else ""
+    include, exclude = origin.get("include"), origin.get("exclude")
+    out = {}
+    for path, blob in tree.items():
+        if not path.startswith(prefix):
+            continue
+        rel = path[len(prefix):]
+        if not rel or not matches(rel, include, exclude):
+            continue
+        out[rel] = blob
+    return out
+
+
+_tarball_cache = {}
+
+
+def fetch_subtree(origin, sha, dest):
+    """Download repo tarball at sha and extract the skill's files into dest."""
+    repo = origin["repo"]
+    if (repo, sha) not in _tarball_cache:
+        url = "https://codeload.github.com/%s/tar.gz/%s" % (repo, sha)
+        req = urllib.request.Request(url, headers={"User-Agent": "skillctl"})
+        _tarball_cache[(repo, sha)] = urllib.request.urlopen(req, timeout=180).read()
+    raw = _tarball_cache[(repo, sha)]
+
+    sub = origin.get("path", "").strip("/")
+    include, exclude = origin.get("include"), origin.get("exclude")
+    wanted = set(upstream_files(origin, sha))
+
+    if os.path.isdir(dest):
+        shutil.rmtree(dest)
+    os.makedirs(dest, exist_ok=True)
+
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tf:
+        for member in tf.getmembers():
+            if not member.isfile():
+                continue
+            parts = member.name.split("/", 1)  # strip the <repo>-<sha>/ prefix
+            if len(parts) < 2:
+                continue
+            path = parts[1]
+            if sub:
+                if not path.startswith(sub + "/"):
+                    continue
+                rel = path[len(sub) + 1:]
+            else:
+                rel = path
+            if rel not in wanted:
+                continue
+            target = os.path.join(dest, rel)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            src = tf.extractfile(member)
+            with open(target, "wb") as f:
+                shutil.copyfileobj(src, f)
+            os.chmod(target, member.mode & 0o777 or 0o644)
+    return len(wanted)
+
+
+# ------------------------------------------------------------------- git ---
+
+
+def git(*args, **kw):
+    try:
+        out = subprocess.run(
+            ["git", "-C", REPO] + list(args),
+            capture_output=True, text=True, check=kw.get("check", False),
+        )
+        return out.stdout.strip()
+    except FileNotFoundError:
+        return ""
+
+
+STATE_FILE = os.path.expanduser("~/.claude/skillctl-state.json")
+
+
+def load_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(**kw):
+    st = load_state()
+    st.update(kw)
+    try:
+        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+        with open(STATE_FILE, "w") as f:
+            json.dump(st, f, indent=2)
+    except OSError:
+        pass
+
+
+def now_iso():
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
+
+
+def age_of(iso):
+    """Human age of an ISO timestamp, or None."""
+    if not iso:
+        return None
+    import datetime
+    try:
+        then = datetime.datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=datetime.timezone.utc)
+    secs = (datetime.datetime.now(datetime.timezone.utc) - then).total_seconds()
+    if secs < 3600:
+        return "%dm ago" % (secs // 60)
+    if secs < 86400:
+        return "%dh ago" % (secs // 3600)
+    return "%dd ago" % (secs // 86400)
+
+
+def repo_state():
+    head = git("rev-parse", "--short", "HEAD") or "?"
+    branch = git("rev-parse", "--abbrev-ref", "HEAD") or "?"
+    dirty = bool(git("status", "--porcelain"))
+    counts = git("rev-list", "--left-right", "--count", "@{upstream}...HEAD")
+    behind = ahead = 0
+    if counts and "\t" in counts:
+        b, a = counts.split("\t")[:2]
+        behind, ahead = int(b), int(a)
+    return {"head": head, "branch": branch, "dirty": dirty, "behind": behind, "ahead": ahead}
+
+
+# ------------------------------------------------------------- install state ---
+
+
+def install_state(name):
+    """How this device currently has <name> installed."""
+    path = os.path.join(INSTALL_DIR, name)
+    src = os.path.join(SKILLS_SRC, name)
+    if not os.path.lexists(path):
+        return "missing", path
+    if os.path.islink(path):
+        target = os.path.realpath(path)
+        if target == os.path.realpath(src):
+            return "linked", path
+        return "wrong-link", target
+    return "unmanaged-copy", path
+
+
+# ------------------------------------------------------------------ commands ---
+
+
+def cmd_status(args):
+    m = load_manifest()
+    skills = m["skills"]
+
+    # Without a fetch, "behind" is measured against a possibly stale
+    # remote-tracking ref — the device would claim to be current when it is not.
+    fetched = False
+    if not args.no_fetch:
+        fetched = subprocess.run(
+            ["git", "-C", REPO, "fetch", "--quiet", "origin"],
+            capture_output=True, timeout=30).returncode == 0
+    st = repo_state()
+
+    print(bold("source of truth  ") + REPO)
+    sync_note = ""
+    if st["behind"]:
+        sync_note = red("  %d commit(s) behind — run: git pull" % st["behind"])
+    elif st["ahead"]:
+        sync_note = yellow("  %d commit(s) ahead — unpushed" % st["ahead"])
+    elif not fetched:
+        sync_note = dim("  (not fetched — comparison may be stale)")
+    print(bold("repo             ") + "%s @ %s%s%s" % (
+        st["branch"], st["head"],
+        yellow(" (uncommitted changes)") if st["dirty"] else "",
+        sync_note))
+    print(bold("install dir      ") + INSTALL_DIR)
+
+    cmd_state = claude_md_state()
+    print(bold("CLAUDE.md        ") + {
+        "installed": green("linked — skill routing active"),
+        "missing": red("NOT INSTALLED — skills load but nothing routes to them; run: skillctl sync"),
+        "foreign": yellow("exists but differs from the repo — merge, or sync --force"),
+        "absent-in-repo": dim("none in repo"),
+    }[cmd_state])
+
+    state = load_state()
+    checked = age_of(state.get("last_check"))
+    if checked:
+        stale = state.get("last_check_stale_count", 0)
+        print(bold("upstreams        ") + "checked %s%s" % (
+            checked,
+            red(" — %d skill(s) had updates" % stale) if stale
+            else green(" — all current")))
+    else:
+        print(bold("upstreams        ") + dim("never checked — run: skillctl check"))
+    print()
+
+    rows, tally = [], {}
+    for name in sorted(skills):
+        spec = skills[name]
+        state, detail = install_state(name)
+        src = os.path.join(SKILLS_SRC, name)
+        if not os.path.isdir(src):
+            state = "absent-in-repo"
+        elif state == "unmanaged-copy":
+            # A real directory instead of a symlink: is it at least identical?
+            state = "copy-in-sync" if tree_hash(src) == tree_hash(detail) else "copy-drifted"
+        tally[state] = tally.get(state, 0) + 1
+        origin = spec.get("origin")
+        rows.append((name, state, origin, spec.get("pin", {})))
+
+    copy_mode = load_state().get("install_mode") == "copy"
+    mark = {
+        "linked": (green("ok"), ""),
+        "copy-in-sync": ((green("ok"), "copied (this platform has no symlinks)") if copy_mode
+                         else (yellow("copy"), "real dir, contents match — run sync to link")),
+        "copy-drifted": (red("drift"), "real dir, contents differ from repo"),
+        "missing": (red("missing"), "not installed — run sync"),
+        "wrong-link": (red("bad-link"), "symlink points elsewhere"),
+        "absent-in-repo": (red("no-src"), "declared in manifest but missing from skills/"),
+    }
+    w = max(len(n) for n in skills) if skills else 10
+    for name, state, origin, pin in rows:
+        sym, note = mark.get(state, (state, ""))
+        upstream = origin["repo"] if origin else "local"
+        pinned = pin.get("commit", "")[:7]
+        print("  %-9s %-*s  %-38s %s" % (
+            sym, w, name,
+            dim(upstream + ("@" + pinned if pinned else "")),
+            dim(note)))
+
+    print()
+    extra = [d for d in sorted(os.listdir(INSTALL_DIR))
+             if d not in skills and not d.startswith(".")
+             and not d.endswith(".bak-skillctl")] if os.path.isdir(INSTALL_DIR) else []
+    if extra and IS_CLOUD:
+        print(dim("  platform:  ") + dim(", ".join(extra) + "  (provided by the cloud image / account sync)"))
+    elif extra:
+        print(yellow("  unmanaged: ") + ", ".join(extra) + dim("  (run: skillctl adopt <name>)"))
+
+    warn_legacy_backups()
+
+    # On a platform without symlinks, an in-sync copy is a correct install.
+    healthy_states = {"linked", "copy-in-sync"} if copy_mode else {"linked"}
+    ok = sum(v for k, v in tally.items() if k in healthy_states)
+    total = len(skills)
+    reasons = ["%d %s" % (v, k) for k, v in sorted(tally.items()) if k not in healthy_states]
+    cmd = claude_md_state()
+    if cmd == "missing":
+        reasons.append("CLAUDE.md not installed")
+    elif cmd == "foreign":
+        reasons.append("CLAUDE.md differs from repo")
+    if st["behind"]:
+        reasons.append("repo %d behind" % st["behind"])
+    if extra and not IS_CLOUD:
+        reasons.append("%d unmanaged" % len(extra))
+    stale = legacy_backups()
+    if stale:
+        # Not cosmetic: each one is loaded as a duplicate skill, so this device
+        # is not in a good state until they are gone.
+        reasons.append("%d stale backup(s) in skills dir" % len(stale))
+    healthy = not reasons
+    verb = "copied" if copy_mode else "linked"
+    print(bold("verdict          ") + (
+        green("in sync — %d/%d skills %s at %s" % (ok, total, verb, st["head"])) if healthy
+        else yellow("%d/%d %s; %s" % (ok, total, verb, ", ".join(reasons)))))
+    if args.json:
+        print(json.dumps({"repo": st, "skills": {n: s for n, s, _, _ in rows}, "unmanaged": extra}, indent=2))
+    return 0 if healthy else 1
+
+
+def install_one(src, dst):
+    """Symlink if the platform allows it, else copy.
+
+    Windows refuses symlinks unless Developer Mode is on or the shell is
+    elevated, so a plain failure here would make the tool unusable there.
+    """
+    try:
+        os.symlink(src, dst)
+        return "link"
+    except (OSError, NotImplementedError, AttributeError):
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*IGNORE))
+        else:
+            shutil.copy2(src, dst)
+        return "copy"
+
+
+def _remove(path):
+    """Delete a file, symlink or directory."""
+    if os.path.islink(path) or os.path.isfile(path):
+        os.unlink(path)
+    elif os.path.isdir(path):
+        shutil.rmtree(path)
+
+
+def backup_dest(name):
+    """Where a displaced install is kept, outside INSTALL_DIR — see BACKUP_DIR.
+
+    One backup per name: a second forced sync replaces the first, matching the
+    previous behaviour. The repo is the real safety net; this is a convenience
+    for the window between syncing and confirming the result.
+    """
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    dest = os.path.join(BACKUP_DIR, name + ".bak-skillctl")
+    if os.path.lexists(dest):
+        _remove(dest)
+    return dest
+
+
+def legacy_backups():
+    """Backups written into INSTALL_DIR by versions before BACKUP_DIR existed."""
+    if not os.path.isdir(INSTALL_DIR):
+        return []
+    return [d for d in sorted(os.listdir(INSTALL_DIR)) if d.endswith(".bak-skillctl")]
+
+
+def warn_legacy_backups():
+    """Loudly, because Claude Code is loading each of these as a real skill."""
+    stale = legacy_backups()
+    if not stale:
+        return
+    print()
+    print(yellow("  warn    ") + "%d stale backup(s) inside %s" % (len(stale), INSTALL_DIR))
+    print(dim("          Claude Code loads every directory there as a skill, so these are"))
+    print(dim("          being loaded as duplicates of the skills they back up. Remove with:"))
+    print(dim("          rm -rf %s/*.bak-skillctl" % INSTALL_DIR))
+
+
+CLAUDE_MD_SRC = os.path.join(REPO, "CLAUDE.md")
+CLAUDE_MD_DST = os.path.expanduser("~/.claude/CLAUDE.md")
+
+
+def claude_md_state():
+    """installed | missing | foreign | absent-in-repo"""
+    if not os.path.isfile(CLAUDE_MD_SRC):
+        return "absent-in-repo"
+    if not os.path.lexists(CLAUDE_MD_DST):
+        return "missing"
+    if os.path.islink(CLAUDE_MD_DST):
+        return ("installed" if os.path.realpath(CLAUDE_MD_DST) == os.path.realpath(CLAUDE_MD_SRC)
+                else "foreign")
+    with open(CLAUDE_MD_SRC, "rb") as a, open(CLAUDE_MD_DST, "rb") as b:
+        return "installed" if a.read() == b.read() else "foreign"
+
+
+def sync_claude_md(args):
+    """Link the repo's CLAUDE.md into ~/.claude. Routing lives there, so a device
+    without it gets the skills but not the instructions to use them."""
+    state = claude_md_state()
+    if state in ("absent-in-repo", "installed"):
+        return 0
+    if state == "foreign" and not args.force:
+        print(yellow("  CLAUDE.md ") + "exists and differs from the repo — left alone. "
+              "Merge it, or re-run with --force")
+        return 0
+    if args.dry_run:
+        print(green("  link    ") + "CLAUDE.md")
+        return 1
+    if os.path.lexists(CLAUDE_MD_DST):
+        if os.path.islink(CLAUDE_MD_DST):
+            os.unlink(CLAUDE_MD_DST)
+        else:
+            backup = backup_dest("CLAUDE.md")
+            shutil.move(CLAUDE_MD_DST, backup)
+            print(dim("          kept previous CLAUDE.md -> %s" % backup))
+    os.makedirs(os.path.dirname(CLAUDE_MD_DST), exist_ok=True)
+    mode = install_one(CLAUDE_MD_SRC, CLAUDE_MD_DST)
+    print(green("  link    " if mode == "link" else "  copy    ") + "CLAUDE.md")
+    return 1
+
+
+def cmd_sync(args):
+    m = load_manifest()
+    os.makedirs(INSTALL_DIR, exist_ok=True)
+    changed = 0
+    modes = set()
+    copy_device = load_state().get("install_mode") == "copy"
+    for name in sorted(m["skills"]):
+        src = os.path.join(SKILLS_SRC, name)
+        dst = os.path.join(INSTALL_DIR, name)
+        if not os.path.isdir(src):
+            print(red("  skip    ") + "%s (missing from skills/)" % name)
+            continue
+        state, _ = install_state(name)
+        if state == "linked":
+            continue
+        if state == "unmanaged-copy" and copy_device and tree_hash(src) == tree_hash(dst):
+            continue  # copy-mode device, already an exact mirror
+        if state in ("unmanaged-copy", "wrong-link"):
+            # On a copy-mode device the installed dirs are our own mirror, so a
+            # difference just means the repo moved ahead — replace it freely.
+            # install_mode is only set after a successful sync, so a first run
+            # still guards whatever content was already on the machine.
+            if state == "unmanaged-copy" and copy_device and tree_hash(src) != tree_hash(dst):
+                shutil.rmtree(dst)
+                modes.add(install_one(src, dst))
+                print(green("  refresh ") + name)
+                changed += 1
+                continue
+            if state == "unmanaged-copy" and tree_hash(src) != tree_hash(dst) and not args.force:
+                print(red("  drift   ") + "%s — real dir differs from repo. "
+                      "Inspect with `skillctl adopt %s --dry-run`, then re-run with --force"
+                      % (name, name))
+                continue
+            if args.dry_run:
+                print(yellow("  replace ") + name)
+                changed += 1
+                continue
+            if os.path.islink(dst):
+                os.unlink(dst)
+            elif tree_hash(src) == tree_hash(dst):
+                # Byte-identical to the repo — nothing to preserve.
+                shutil.rmtree(dst)
+            else:
+                backup = backup_dest(name)
+                shutil.move(dst, backup)
+                print(dim("          kept previous copy -> %s" % backup))
+        if args.dry_run:
+            print(green("  link    ") + name)
+        else:
+            mode = install_one(src, dst)
+            modes.add(mode)
+            print(green("  link    " if mode == "link" else "  copy    ") + name)
+        changed += 1
+
+    changed += sync_claude_md(args)
+
+    extra = [d for d in sorted(os.listdir(INSTALL_DIR))
+             if d not in m["skills"] and not d.startswith(".") and not d.endswith(".bak-skillctl")]
+    for name in extra:
+        if IS_CLOUD:
+            print(dim("  platform  ") + "%s (cloud image / account sync — left alone)" % name)
+        else:
+            print(yellow("  extra   ") + "%s — not in manifest (skillctl adopt %s, or delete it)" % (name, name))
+
+    warn_legacy_backups()
+
+    if modes and not args.dry_run:
+        mode = "copy" if "copy" in modes else "link"
+        save_state(install_mode=mode)
+        if mode == "copy":
+            print()
+            print(yellow("  note: ") + "this platform refused symlinks, so skills were COPIED.")
+            print(dim("        On Windows, enable Developer Mode (or run elevated) for symlinks."))
+            print(dim("        Until then `git pull` is not enough — re-run `skillctl sync` after each pull."))
+
+    print()
+    print(green("nothing to do — already in sync") if not changed
+          else bold("%d change(s)%s" % (changed, " (dry run)" if args.dry_run else "")))
+    return 0
+
+
+def _check_one(name, spec):
+    """Compare vendored copy against upstream. Returns a result dict."""
+    origin = spec.get("origin")
+    src = os.path.join(SKILLS_SRC, name)
+    if not origin:
+        return {"name": name, "state": "local"}
+    pin = spec.get("pin", {}).get("commit")
+    ref = origin.get("ref", "main")
+    try:
+        latest = resolve_ref(origin["repo"], ref)
+        up = upstream_files(origin, latest)
+    except Exception as e:
+        return {"name": name, "state": "error", "detail": "%s: %s" % (type(e).__name__, e)}
+
+    local = {rel: git_blob_sha(ap) for rel, ap in walk_files(src).items()}
+    modified = sorted(k for k in local if k in up and local[k] != up[k])
+    added_up = sorted(k for k in up if k not in local)
+    only_local = sorted(k for k in local if k not in up)
+
+    same_commit = (pin == latest)
+    identical = not (modified or added_up or only_local)
+    state = "current" if identical else ("behind" if not same_commit else "modified")
+    return {
+        "name": name, "state": state, "repo": origin["repo"], "ref": ref,
+        "pin": pin, "latest": latest, "modified": modified,
+        "added_upstream": added_up, "only_local": only_local,
+    }
+
+
+def cmd_check(args):
+    m = load_manifest()
+    names = [args.name] if args.name else sorted(m["skills"])
+    stale = 0
+    print(bold("checking %d skill(s) against upstream…" % len(names)))
+    print()
+    for name in names:
+        spec = m["skills"].get(name) or die("unknown skill: %s" % name)
+        r = _check_one(name, spec)
+        if r["state"] == "local":
+            print("  %-9s %-32s %s" % (dim("local"), name, dim("no upstream — owned by this repo")))
+            continue
+        if r["state"] == "error":
+            print("  %-9s %-32s %s" % (red("error"), name, r["detail"]))
+            continue
+        moved = r["pin"] != r["latest"]
+        if r["state"] == "current":
+            note = "up to date" + ("" if not moved else " (content identical; pin lags)")
+            print("  %-9s %-32s %s" % (green("current"), name, dim(note)))
+            continue
+        stale += 1
+        counts = []
+        if r["modified"]:
+            counts.append("%d changed" % len(r["modified"]))
+        if r["added_upstream"]:
+            counts.append("%d new upstream" % len(r["added_upstream"]))
+        if r["only_local"]:
+            counts.append("%d only local" % len(r["only_local"]))
+        label = red("UPDATE") if r["state"] == "behind" else yellow("MODIFIED")
+        print("  %-9s %-32s %s" % (label, name, ", ".join(counts)))
+        print("            %s" % dim("%s  %s -> %s" % (
+            r["repo"], r["pin"][:7] if r["pin"] else "unpinned", r["latest"][:7])))
+        for f in (r["modified"] + r["added_upstream"])[:args.files]:
+            tag = "changed" if f in r["modified"] else "new"
+            print("              %s %s" % (dim("·"), "%s %s" % (f, dim("[%s]" % tag))))
+        rest = len(r["modified"]) + len(r["added_upstream"]) - args.files
+        if rest > 0:
+            print(dim("              … and %d more" % rest))
+    print()
+    print(green("all vendored skills are current") if not stale
+          else bold("%d skill(s) have upstream changes" % stale)
+               + dim("   review: skillctl diff <name>   adopt: skillctl vendor <name>"))
+    if not args.name:  # only a full sweep is a meaningful freshness record
+        save_state(last_check=now_iso(), last_check_stale_count=stale,
+                   last_check_head=repo_state()["head"])
+    return stale and 2 or 0
+
+
+def cmd_diff(args):
+    m = load_manifest()
+    spec = m["skills"].get(args.name) or die("unknown skill: %s" % args.name)
+    origin = spec.get("origin")
+    if not origin:
+        die("%s has no upstream (it is owned by this repo)" % args.name)
+    latest = resolve_ref(origin["repo"], origin.get("ref", "main"))
+    tmp = tempfile.mkdtemp(prefix="skillctl-diff-")
+    try:
+        fetch_subtree(origin, latest, os.path.join(tmp, args.name))
+        src = os.path.join(SKILLS_SRC, args.name)
+        print(bold("%s: vendored (a) vs %s@%s (b)" % (args.name, origin["repo"], latest[:7])))
+        print()
+        rc = subprocess.run(
+            ["git", "diff", "--no-index", "--stat" if args.stat else "--patch",
+             src, os.path.join(tmp, args.name)],
+        ).returncode
+        if rc == 0:
+            print(green("identical — nothing to adopt"))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return 0
+
+
+def cmd_vendor(args):
+    m = load_manifest()
+    names = sorted(m["skills"]) if args.all else [args.name]
+    if not names or names == [None]:
+        die("give a skill name or --all")
+    updated = 0
+    for name in names:
+        spec = m["skills"].get(name) or die("unknown skill: %s" % name)
+        origin = spec.get("origin")
+        if not origin:
+            continue
+        latest = resolve_ref(origin["repo"], origin.get("ref", "main"))
+        dest = os.path.join(SKILLS_SRC, name)
+        before = tree_hash(dest)
+        if args.dry_run:
+            print(yellow("  would vendor ") + "%s <- %s@%s" % (name, origin["repo"], latest[:7]))
+            continue
+        n = fetch_subtree(origin, latest, dest)
+        after = tree_hash(dest)
+        spec["pin"] = {"commit": latest, "ref": origin.get("ref", "main")}
+        spec["hash"] = after
+        if before == after:
+            print("  %-9s %-32s %s" % (dim("nochange"), name, dim("%d files" % n)))
+        else:
+            updated += 1
+            print("  %-9s %-32s %s" % (green("vendored"), name,
+                                       dim("%d files @ %s" % (n, latest[:7]))))
+    if not args.dry_run:
+        save_manifest(m)
+        print()
+        print(bold("%d skill(s) updated." % updated) + dim("  Review with `git -C %s diff`, then commit and push." % REPO))
+        if updated:
+            print()
+            print(dim("linting vendored content…"))
+            if cmd_lint(args) != 0:
+                print(red("lint failed") + " — an upstream change broke a skill's frontmatter. "
+                      "Fix before committing.")
+                return 1
+    return 0
+
+
+def cmd_adopt(args):
+    """Pull an installed-but-unmanaged skill into the repo and register it."""
+    m = load_manifest()
+    live = os.path.join(INSTALL_DIR, args.name)
+    if not os.path.isdir(live) or os.path.islink(live):
+        die("%s is not a real directory in %s" % (args.name, INSTALL_DIR))
+    dest = os.path.join(SKILLS_SRC, args.name)
+    if args.dry_run:
+        if os.path.isdir(dest):
+            subprocess.run(["git", "diff", "--no-index", "--stat", dest, live])
+        else:
+            print("would add %d file(s) as a new skill" % len(walk_files(live)))
+        return 0
+    if os.path.isdir(dest):
+        shutil.rmtree(dest)
+    shutil.copytree(live, dest, ignore=shutil.ignore_patterns(*IGNORE))
+    spec = m["skills"].setdefault(args.name, {"origin": None})
+    spec["hash"] = tree_hash(dest)
+    save_manifest(m)
+    print(green("adopted ") + "%s into skills/ and registered it" % args.name)
+    print(dim("  run `skillctl sync` to replace the copy with a symlink"))
+    return 0
+
+
+def read_frontmatter(path):
+    """Minimal YAML-frontmatter reader — enough for name/description, no deps."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError as e:
+        return None, str(e)
+    if not text.startswith("---"):
+        return None, "no frontmatter block"
+    end = text.find("\n---", 3)
+    if end < 0:
+        return None, "unterminated frontmatter block"
+    return text[3:end], None
+
+
+def fm_field(block, key):
+    """Value of `key`, handling plain scalars and folded/literal (>, |) blocks."""
+    m = re.search(r'^%s:\s*(.*)$' % re.escape(key), block, re.M)
+    if not m:
+        return None
+    value = m.group(1).strip()
+    if value in (">", "|", ">-", "|-", ">+", "|+", ""):
+        lines, started = [], False
+        for line in block[m.end():].split("\n"):
+            if not started and not line.strip():
+                continue
+            if line[:1] in (" ", "\t"):
+                lines.append(line.strip())
+                started = True
+            elif started or line.strip():
+                break
+        return " ".join(lines).strip()
+    return value.strip().strip('"\'')
+
+
+def cmd_lint(args):
+    """Catch problems that stop a skill registering or triggering correctly.
+
+    Vendoring is the usual way these appear: upstream renames a skill and the
+    directory silently stops matching the declared name.
+    """
+    m = load_manifest()
+    errors, warnings = [], []
+
+    for name in sorted(m["skills"]):
+        d = os.path.join(SKILLS_SRC, name)
+        if not os.path.isdir(d):
+            errors.append((name, "declared in skills.json but missing from skills/"))
+            continue
+        p = os.path.join(d, "SKILL.md")
+        if not os.path.isfile(p):
+            errors.append((name, "no SKILL.md — the client cannot register it"))
+            continue
+        block, err = read_frontmatter(p)
+        if block is None:
+            errors.append((name, "SKILL.md %s" % err))
+            continue
+        declared = fm_field(block, "name")
+        desc = fm_field(block, "description")
+        if not declared:
+            errors.append((name, "frontmatter has no `name`"))
+        elif declared != name:
+            errors.append((name, "frontmatter name is '%s' but the directory is '%s' — "
+                                 "rename the directory to match, or the manifest key"
+                           % (declared, name)))
+        if not desc:
+            errors.append((name, "frontmatter has no `description` — nothing to trigger on"))
+        else:
+            if len(desc) < 40:
+                warnings.append((name, "description is %d chars; too terse to trigger reliably"
+                                 % len(desc)))
+            if len(desc) > 700:
+                warnings.append((name, "description is %d chars; very long descriptions "
+                                       "dilute the trigger" % len(desc)))
+
+    if os.path.isdir(SKILLS_SRC):
+        for d in sorted(os.listdir(SKILLS_SRC)):
+            if os.path.isdir(os.path.join(SKILLS_SRC, d)) and d not in m["skills"]:
+                errors.append((d, "present in skills/ but not declared in skills.json"))
+
+    for n, msg in errors:
+        print("  %-9s %-28s %s" % (red("error"), n, msg))
+    for n, msg in warnings:
+        print("  %-9s %-28s %s" % (yellow("warn"), n, msg))
+    print()
+    if errors:
+        print(bold("%d error(s), %d warning(s)" % (len(errors), len(warnings))))
+    elif warnings:
+        print(green("no errors") + ", %d warning(s)" % len(warnings))
+    else:
+        print(green("all %d skills well-formed" % len(m["skills"])))
+    return 1 if errors else 0
+
+
+EVAL_DIR = os.path.join(REPO, "eval")
+
+
+def wilson(k, n, z=1.96):
+    """95% confidence interval for a proportion. Small n gives wide bounds —
+    that is the point: it stops a lucky run reading as a real improvement."""
+    if n == 0:
+        return 0.0, 0.0
+    import math
+    p = k / n
+    d = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / d
+    margin = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return max(0.0, centre - margin), min(1.0, centre + margin)
+
+
+def skills_invoked(stream_lines):
+    """Extract every skill name invoked, from a stream-json transcript.
+
+    Ground truth rather than self-report: the CLI emits a tool_use block for
+    each Skill call, including ones made inside subagents.
+    """
+    found = []
+    for line in stream_lines:
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if ev.get("type") != "assistant":
+            continue
+        for block in (ev.get("message") or {}).get("content") or []:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            if block.get("name") != "Skill":
+                continue
+            inp = block.get("input") or {}
+            name = inp.get("skill") or inp.get("name") or inp.get("command")
+            found.append(name if name else "<unnamed>")
+    return found
+
+
+def run_one(prompt, workspace, permission_mode, timeout):
+    """One headless Claude run. Returns (skills_invoked, error_or_None)."""
+    tmp = tempfile.mkdtemp(prefix="skillctl-eval-")
+    try:
+        cwd = tmp
+        if workspace:
+            src = os.path.join(EVAL_DIR, "workspaces", workspace)
+            if not os.path.isdir(src):
+                return [], "no such workspace: %s" % workspace
+            cwd = os.path.join(tmp, workspace)
+            shutil.copytree(src, cwd)
+            subprocess.run(["git", "init", "-q"], cwd=cwd, capture_output=True)
+            subprocess.run(["git", "add", "-A"], cwd=cwd, capture_output=True)
+            subprocess.run(["git", "-c", "user.email=eval@local", "-c", "user.name=eval",
+                            "commit", "-qm", "initial"], cwd=cwd, capture_output=True)
+        cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
+               "--permission-mode", permission_mode]
+        try:
+            proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        except FileNotFoundError:
+            return [], "the `claude` CLI is not on PATH"
+        except subprocess.TimeoutExpired:
+            return [], "timed out after %ds" % timeout
+        lines = proc.stdout.splitlines()
+        blob = proc.stdout + proc.stderr
+        if "Please run /login" in blob or "authentication_failed" in blob:
+            return [], "the `claude` CLI is not logged in — run `claude` and /login first"
+        if not lines:
+            return [], (proc.stderr.strip().splitlines() or ["no output"])[0][:120]
+        return skills_invoked(lines), None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def cmd_eval(args):
+    """Measure how often prompts actually trigger the skills they should.
+
+    Activation is stochastic — a single run cannot tell 'never' from
+    'sometimes'. Repetitions plus a confidence interval can.
+    """
+    path = args.fixtures or os.path.join(EVAL_DIR, "fixtures.json")
+    try:
+        with open(path) as f:
+            fx = json.load(f)
+    except (OSError, ValueError) as e:
+        die("cannot read fixtures %s: %s" % (path, e))
+
+    cases = [c for c in fx.get("cases", [])
+             if not args.filter or args.filter in c["id"]]
+    if not cases:
+        die("no cases matched %r" % args.filter)
+    reps = args.reps or fx.get("reps", 5)
+    total_runs = len(cases) * reps
+
+    print(bold("skillctl eval") + "  %d case(s) x %d rep(s) = %d headless Claude run(s)"
+          % (len(cases), reps, total_runs))
+    print(dim("  each run is a real session and costs tokens; ^C to abort"))
+    print()
+
+    results, failed = [], 0
+    for case in cases:
+        fired = 0
+        seen = {}
+        for i in range(reps):
+            got, err = run_one(case["prompt"], case.get("workspace"),
+                               args.permission_mode, args.timeout)
+            if err:
+                failed += 1
+                print("  %-9s %-18s rep %d: %s" % (red("error"), case["id"], i + 1, err))
+                if "not logged in" in err or "not on PATH" in err:
+                    die("cannot run evals until that is fixed")
+                continue
+            hit = any(s in case["expect"] for s in got)
+            fired += 1 if hit else 0
+            for s in got:
+                seen[s] = seen.get(s, 0) + 1
+            print("  %-9s %-18s rep %d/%d  %s" % (
+                green("fired") if hit else dim("  -  "), case["id"], i + 1, reps,
+                dim(", ".join(got) if got else "no skill")))
+        n = reps - 0
+        rate = fired / n if n else 0.0
+        lo, hi = wilson(fired, n)
+        base = case.get("baseline")
+        results.append({"id": case["id"], "expect": case["expect"], "fired": fired,
+                        "n": n, "rate": rate, "ci": [lo, hi], "baseline": base,
+                        "all_skills": seen})
+        print()
+
+    print(bold("%-20s %-7s %-7s %-18s %s" % ("case", "fired", "rate", "95% CI", "vs baseline")))
+    print("-" * 74)
+    regressed = 0
+    for r in results:
+        cmp_txt = dim("n/a")
+        if r["baseline"] is not None:
+            delta = r["rate"] - r["baseline"]
+            # Only a baseline outside the interval is a real change.
+            if r["baseline"] < r["ci"][0]:
+                cmp_txt = green("improved (+%.0f pts)" % (delta * 100))
+            elif r["baseline"] > r["ci"][1]:
+                cmp_txt = red("REGRESSED (%.0f pts)" % (delta * 100))
+                regressed += 1
+            else:
+                cmp_txt = dim("%+.0f pts (within noise)" % (delta * 100))
+        print("%-20s %-7s %-7s [%3.0f%%, %3.0f%%]%s %s" % (
+            r["id"], "%d/%d" % (r["fired"], r["n"]), "%.0f%%" % (r["rate"] * 100),
+            r["ci"][0] * 100, r["ci"][1] * 100, " " * 4, cmp_txt))
+    print()
+    hit = sum(r["fired"] for r in results)
+    n = sum(r["n"] for r in results)
+    lo, hi = wilson(hit, n)
+    print(bold("overall  ") + "%d/%d = %.0f%%  [%.0f%%, %.0f%%]"
+          % (hit, n, hit / n * 100 if n else 0, lo * 100, hi * 100))
+    if failed:
+        print(yellow("  %d run(s) errored and were excluded" % failed))
+    if reps < 10:
+        print(dim("  note: %d reps gives wide intervals; ~11 are needed to separate "
+                  "a 20%% skill from an 80%% one" % reps))
+    if args.save:
+        with open(args.save, "w") as f:
+            json.dump({"reps": reps, "results": results}, f, indent=2)
+        print(dim("  wrote %s" % args.save))
+    return 1 if regressed else 0
+
+
+def cmd_seal(args):
+    """Recompute every hash from the current repo contents."""
+    m = load_manifest()
+    for name, spec in m["skills"].items():
+        src = os.path.join(SKILLS_SRC, name)
+        if os.path.isdir(src):
+            spec["hash"] = tree_hash(src)
+    save_manifest(m)
+    print(green("hashes refreshed for %d skill(s)" % len(m["skills"])))
+    return 0
+
+
+# ------------------------------------------------------------------ publish ---
+
+# GitHub's noreply form: commits still attribute to the account that owns the
+# mirror, without putting a real address in a public repo. Override with a
+# top-level "mirror_identity" in skills.json.
+DEFAULT_MIRROR_IDENTITY = {
+    "name": "akashparmar93",
+    "email": "akashparmar93@users.noreply.github.com",
+}
+
+MIRROR_README = """# claude-skills-dist
+
+Public, generated distribution of my Claude Code skills. **Do not edit or open
+pull requests here** — this repo is overwritten wholesale by `skillctl publish`
+from a private source repo, so any change made here is lost on the next publish.
+
+It exists for one reason: a Claude Code cloud session working in some *other*
+repo cannot clone a private one (the session's git credentials are scoped to
+the repos attached to that session), so the skills have to be reachable
+without authentication.
+
+## What a cloud session does with this
+
+```bash
+git clone --depth 1 https://github.com/%(mirror_repo)s ~/.claude/claude-skills
+~/.claude/claude-skills/bin/cloud-setup.sh
+```
+
+`cloud-setup.sh` registers `bin/cloud-sync.sh` as a user-level SessionStart
+hook, which re-pulls this repo and re-runs `skillctl sync` at the start of
+every session. Skills installed that way are registered in the same session.
+
+## Contents
+
+`skills/` — %(count)d skills, `skills.json` — the manifest they are pinned by,
+`CLAUDE.md` — the routing table that makes them fire, `bin/skillctl` — the
+sync tool, `bin/cloud-*.sh` — the cloud bootstrap and hook.
+
+Most of the skills are vendored from public upstreams; `skills.json` records
+each one's origin repo and pinned commit. Credit belongs to their authors.
+"""
+
+
+def _publish_tree(dest):
+    """Copy the publishable subset of this repo into dest."""
+    for rel in PUBLISH_PATHS:
+        src = os.path.join(REPO, rel)
+        dst = os.path.join(dest, rel)
+        if not os.path.exists(src):
+            die("publish set references %s, which does not exist" % rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst,
+                            ignore=shutil.ignore_patterns(*IGNORE))
+        else:
+            shutil.copy2(src, dst)
+
+
+def cmd_publish(args):
+    """Push the skills-only subset of this repo to its public mirror.
+
+    The mirror gets a fresh history — one commit per publish, naming the
+    private commit it came from. Nothing from this repo's own history travels,
+    which is the point: the initial commit here hardcoded a Windows username,
+    and OPEN.md carries an email address and the name of a private repo.
+    """
+    m = load_manifest()
+    mirror = args.mirror or m.get("mirror")
+    if not mirror:
+        die("no mirror configured — add a top-level \"mirror\" to skills.json "
+            "or pass --mirror")
+
+    dirty = git("status", "--porcelain")
+    if dirty and not args.allow_dirty:
+        die("working tree is dirty — commit first, so the mirror names a real "
+            "commit (or pass --allow-dirty)")
+    head = git("rev-parse", "HEAD") or "unknown"
+
+    print(bold("mirror  ") + mirror)
+    print(bold("source  ") + head[:12] + dim("  (%d skills)" % len(m["skills"])))
+    print()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        clone = os.path.join(tmp, "mirror")
+        r = subprocess.run(["git", "clone", "--quiet", "--depth", "1", mirror, clone],
+                           capture_output=True, text=True)
+        fresh = r.returncode != 0
+        if fresh:
+            # An empty repo cannot be cloned; start one and let the push create main.
+            print(dim("  mirror is empty or unreachable — initialising a new history"))
+            os.makedirs(clone)
+            subprocess.run(["git", "init", "--quiet", "-b", "main", clone], check=True)
+            subprocess.run(["git", "-C", clone, "remote", "add", "origin", mirror], check=True)
+        else:
+            # Wipe tracked content so a deleted skill really disappears.
+            for entry in os.listdir(clone):
+                if entry == ".git":
+                    continue
+                p = os.path.join(clone, entry)
+                shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
+
+        _publish_tree(clone)
+        with open(os.path.join(clone, "README.md"), "w") as f:
+            f.write(MIRROR_README % {
+                "mirror_repo": mirror.rstrip("/").replace("https://github.com/", ""),
+                "count": len(m["skills"]),
+            })
+
+        subprocess.run(["git", "-C", clone, "add", "-A"], check=True)
+        staged = subprocess.run(["git", "-C", clone, "diff", "--cached", "--stat"],
+                                capture_output=True, text=True).stdout.strip()
+        if not staged:
+            print(green("mirror already matches this commit — nothing to publish"))
+            return 0
+        print(dim("\n".join("  " + l for l in staged.splitlines()[-12:])))
+        print()
+
+        if args.dry_run:
+            print(bold("dry run — nothing pushed"))
+            return 0
+
+        msg = args.message or "publish: %s" % head[:12]
+        # Pin the identity rather than inheriting the device's. Otherwise the
+        # publishing machine's git config decides what lands in a *public*
+        # repo, and a normally-configured device would stamp a real email
+        # address onto every mirror commit — the exact leak the mirror avoids.
+        ident = m.get("mirror_identity", DEFAULT_MIRROR_IDENTITY)
+        # Via the environment, not `-c user.email`: GIT_AUTHOR_* / GIT_COMMITTER_*
+        # take precedence over config, so a device that exports them would still
+        # leak its real address through the config route. Verified 2026-08-21.
+        env = dict(os.environ,
+                   GIT_AUTHOR_NAME=ident["name"], GIT_AUTHOR_EMAIL=ident["email"],
+                   GIT_COMMITTER_NAME=ident["name"], GIT_COMMITTER_EMAIL=ident["email"])
+        subprocess.run(["git", "-C", clone, "commit", "--quiet", "--no-gpg-sign",
+                        "-m", msg], check=True, env=env)
+        push = subprocess.run(["git", "-C", clone, "push", "--quiet", "origin", "main"],
+                              capture_output=True, text=True)
+        if push.returncode != 0:
+            die("push to mirror failed:\n%s" % (push.stderr.strip() or push.stdout.strip()))
+
+    print(green("published to %s" % mirror))
+    print(dim("  cloud sessions pick this up on their next session start."))
+    return 0
+
+
+def main():
+    p = argparse.ArgumentParser(prog="skillctl", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd")
+
+    s = sub.add_parser("status", help="where this device stands")
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--no-fetch", action="store_true",
+                   help="skip the git fetch (offline; behind-count may be stale)")
+    s.set_defaults(fn=cmd_status)
+
+    s = sub.add_parser("sync", help="make ~/.claude/skills match the manifest")
+    s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--force", action="store_true", help="replace drifted real directories")
+    s.set_defaults(fn=cmd_sync)
+
+    s = sub.add_parser("check", help="which vendored skills have upstream updates")
+    s.add_argument("name", nargs="?")
+    s.add_argument("--files", type=int, default=5, help="how many changed files to list")
+    s.set_defaults(fn=cmd_check)
+
+    s = sub.add_parser("diff", help="show what changed upstream since the pin")
+    s.add_argument("name")
+    s.add_argument("--stat", action="store_true")
+    s.set_defaults(fn=cmd_diff)
+
+    s = sub.add_parser("vendor", help="pull upstream in and re-pin")
+    s.add_argument("name", nargs="?")
+    s.add_argument("--all", action="store_true")
+    s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(fn=cmd_vendor)
+
+    s = sub.add_parser("adopt", help="bring an unmanaged local skill into the repo")
+    s.add_argument("name")
+    s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(fn=cmd_adopt)
+
+    s = sub.add_parser("lint", help="check every skill is well-formed enough to register")
+    s.set_defaults(fn=cmd_lint)
+
+    s = sub.add_parser("eval", help="measure how often prompts actually trigger their skills")
+    s.add_argument("--reps", type=int, help="repetitions per case (default: from fixtures)")
+    s.add_argument("--filter", help="only run cases whose id contains this")
+    s.add_argument("--fixtures", help="path to a fixtures file")
+    s.add_argument("--permission-mode", default="acceptEdits",
+                   help="passed to `claude -p` (default: acceptEdits)")
+    s.add_argument("--timeout", type=int, default=600, help="per-run timeout in seconds")
+    s.add_argument("--save", help="write results as JSON to this path")
+    s.set_defaults(fn=cmd_eval)
+
+    s = sub.add_parser("publish", help="push the skills-only subset to the public mirror")
+    s.add_argument("--mirror", help="override the mirror URL from skills.json")
+    s.add_argument("--message", help="commit message for the mirror")
+    s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--allow-dirty", action="store_true",
+                   help="publish even though this repo has uncommitted changes")
+    s.set_defaults(fn=cmd_publish)
+
+    s = sub.add_parser("seal", help="recompute manifest hashes from repo contents")
+    s.set_defaults(fn=cmd_seal)
+
+    args = p.parse_args()
+    if not getattr(args, "fn", None):
+        p.print_help()
+        return 0
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
