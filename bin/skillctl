@@ -298,8 +298,18 @@ def load_state():
 
 
 def save_state(**kw):
+    """Merge keys into the device state. A value of None retires its key.
+
+    State is merged rather than rewritten, so a field that falls out of use
+    would otherwise sit in the file at whatever value it last held, and read as
+    current by anyone opening it.
+    """
     st = load_state()
-    st.update(kw)
+    for k, v in kw.items():
+        if v is None:
+            st.pop(k, None)
+        else:
+            st[k] = v
     try:
         os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
         with open(STATE_FILE, "w") as f:
@@ -817,7 +827,10 @@ def cmd_check(args):
     if not args.name:  # only a full sweep is a meaningful freshness record
         save_state(last_check=now_iso(), last_check_stale_count=stale,
                    last_check_pins=pin_fingerprint(m),
-                   last_check_head=repo_state()["head"])
+                   # Written and never read until it was removed; retired here
+                   # so devices that ran the old version drop it too. Safe to
+                   # delete this line once both Macs have checked once.
+                   last_check_head=None)
     return stale and 2 or 0
 
 
