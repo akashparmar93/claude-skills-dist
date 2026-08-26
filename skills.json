@@ -15,14 +15,14 @@
       }
     },
     "caveman": {
-      "hash": "sha256:784110d6c3dc6d7e8d094ac998ebf811e19462ad40a9f0f2f47cbbae9c7e8753",
+      "hash": "sha256:2a53959c5238aec65da1fa506ab715da83216ea2365f74dfe7401d0d5fb5c317",
       "origin": {
         "path": "skills/caveman",
         "ref": "main",
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "2f49f0e1a352aa810e70056b7930aeb0b3d219b4",
+        "commit": "81536f57b3303b7de7f5bc5b564cc344f9112d68",
         "ref": "main"
       }
     },
@@ -39,7 +39,7 @@
       }
     },
     "code-review-skill": {
-      "hash": "sha256:b37d7ff2d76996bf44f23393fc280ebaed4936eab72bab68455d42989ab4a872",
+      "hash": "sha256:ba67441fbef32161c42f7093cb905922468b82418c927a59e7f8463ce931879f",
       "origin": {
         "include": [
           "SKILL.md",
@@ -52,7 +52,7 @@
         "repo": "awesome-skills/code-review-skill"
       },
       "pin": {
-        "commit": "95c707b999295f6c8ee2d0d3d1c61cc0c2e1a52c",
+        "commit": "277f4793018448eb08289bd54ab3c0e241a02b7b",
         "ref": "main"
       }
     },
@@ -93,14 +93,14 @@
       }
     },
     "impeccable": {
-      "hash": "sha256:8b4a6093d250b52a0c76fe6e89004611011c30427f8fbf6b8fb08f5f09c54757",
+      "hash": "sha256:45a545fa8545c50aa65e01233bfe12ca05e3cc1668d2ff9344fcd159b1c06895",
       "origin": {
         "path": ".claude/skills/impeccable",
         "ref": "main",
         "repo": "pbakaus/impeccable"
       },
       "pin": {
-        "commit": "f88b2837a7d7c3182e46307bbbb091a1ed547571",
+        "commit": "63b04e2530f5c7b41ea83c133daab24f34912456",
         "ref": "main"
       }
     },
