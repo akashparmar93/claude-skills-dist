@@ -313,8 +313,8 @@ def now_iso():
     return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
 
 
-def age_of(iso):
-    """Human age of an ISO timestamp, or None."""
+def age_seconds(iso):
+    """Seconds since an ISO timestamp, or None if absent or unparseable."""
     if not iso:
         return None
     import datetime
@@ -324,12 +324,76 @@ def age_of(iso):
         return None
     if then.tzinfo is None:
         then = then.replace(tzinfo=datetime.timezone.utc)
-    secs = (datetime.datetime.now(datetime.timezone.utc) - then).total_seconds()
+    return (datetime.datetime.now(datetime.timezone.utc) - then).total_seconds()
+
+
+def age_of(iso):
+    """Human age of an ISO timestamp, or None."""
+    secs = age_seconds(iso)
+    if secs is None:
+        return None
     if secs < 3600:
         return "%dm ago" % (secs // 60)
     if secs < 86400:
         return "%dh ago" % (secs // 3600)
     return "%dd ago" % (secs // 86400)
+
+
+# Upstream moves on its own schedule, so a check only speaks for the tree for
+# so long. Past this, `status` reports the age instead of asserting a verdict.
+CHECK_AGE_LIMIT = 7 * 86400
+
+
+def pin_fingerprint(manifest):
+    """Digest of every input `check` compares against upstream.
+
+    Keyed on the pins and vendored content rather than on HEAD: most commits
+    here are docs and CI, and invalidating the record on each of them would cry
+    wolf until the line got ignored -- which is the failure it exists to stop.
+    """
+    import hashlib
+    parts = []
+    for name in sorted(manifest.get("skills", {})):
+        spec = manifest["skills"][name] or {}
+        origin = spec.get("origin")
+        if not origin:
+            continue  # no upstream, so `check` never compares it
+        parts.append("\t".join((
+            name,
+            origin.get("repo", ""),
+            origin.get("ref", "main"),
+            origin.get("path", ""),
+            (spec.get("pin") or {}).get("commit", ""),
+            spec.get("hash", ""),
+        )))
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def check_freshness(state, manifest, age_limit=CHECK_AGE_LIMIT):
+    """How much of the recorded `check` result can still be claimed.
+
+    The result is a fact about the tree that was checked. `status` used to
+    print it as a fact about the current tree, so a pull or a vendor left it
+    confidently wrong in whichever direction the pins had moved.
+
+    Returns (verdict, stale_count):
+      "never"       nothing recorded
+      "superseded"  pins or vendored content moved since; re-check
+      "aged"        still describes these pins, but old enough that upstream
+                    may have moved underneath it
+      "fresh"       believable as printed
+    """
+    if not state.get("last_check"):
+        return "never", 0
+    stale = state.get("last_check_stale_count", 0)
+    # A record from a skillctl that predated fingerprints has none. Claiming
+    # freshness from it is the original bug, so treat it as needing a re-check.
+    if state.get("last_check_pins") != pin_fingerprint(manifest):
+        return "superseded", stale
+    secs = age_seconds(state["last_check"])
+    if secs is None or secs > age_limit:
+        return "superseded" if secs is None else "aged", stale
+    return "fresh", stale
 
 
 def repo_state():
@@ -400,15 +464,27 @@ def cmd_status(args):
     }[cmd_state])
 
     state = load_state()
+    verdict, stale = check_freshness(state, m)
     checked = age_of(state.get("last_check"))
-    if checked:
-        stale = state.get("last_check_stale_count", 0)
+    if verdict == "never":
+        print(bold("upstreams        ") + dim("never checked — run: skillctl check"))
+    elif verdict == "superseded":
+        # Reporting the old count here is what made this line wrong in both
+        # directions: "all current" after a pull brought pins nothing had
+        # checked, and "3 had updates" after those three were vendored.
+        print(bold("upstreams        ") + yellow(
+            "pins moved since the last check%s — re-run: skillctl check"
+            % (" (%s)" % checked if checked else "")))
+    elif verdict == "aged":
+        print(bold("upstreams        ") + "checked %s%s" % (
+            checked,
+            red(" — %d skill(s) had updates" % stale) if stale
+            else yellow(" — none then; upstream may have moved since")))
+    else:
         print(bold("upstreams        ") + "checked %s%s" % (
             checked,
             red(" — %d skill(s) had updates" % stale) if stale
             else green(" — all current")))
-    else:
-        print(bold("upstreams        ") + dim("never checked — run: skillctl check"))
     print()
 
     rows, tally = [], {}
@@ -740,6 +816,7 @@ def cmd_check(args):
                + dim("   review: skillctl diff <name>   adopt: skillctl vendor <name>"))
     if not args.name:  # only a full sweep is a meaningful freshness record
         save_state(last_check=now_iso(), last_check_stale_count=stale,
+                   last_check_pins=pin_fingerprint(m),
                    last_check_head=repo_state()["head"])
     return stale and 2 or 0
 
