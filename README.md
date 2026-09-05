@@ -22,7 +22,7 @@ every session. Skills installed that way are registered in the same session.
 
 ## Contents
 
-`skills/` — 21 skills, `skills.json` — the manifest they are pinned by,
+`skills/` — 22 skills, `skills.json` — the manifest they are pinned by,
 `CLAUDE.md` — the routing table that makes them fire, `bin/skillctl` — the
 sync tool, `bin/cloud-*.sh` — the cloud bootstrap and hook.
 
