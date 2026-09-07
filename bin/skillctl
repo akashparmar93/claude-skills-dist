@@ -1128,15 +1128,30 @@ def timeline(stream_lines):
     the whole session, so this keeps what a predicate can match on: which tool
     ran, and the one string that identifies what it ran against.
     """
-    events = []
+    parsed = []
     for line in stream_lines:
         line = line.strip()
         if not line.startswith("{"):
             continue
         try:
-            ev = json.loads(line)
+            parsed.append(json.loads(line))
         except ValueError:
             continue
+
+    # A refused call still emits a tool_use block, so the request alone proves
+    # nothing: a run can ask to run the suite, be refused, and still look like
+    # it verified. Refusal is reported in the result event, and that is the
+    # only thing that means a call did not happen — a `tool_result` marked
+    # is_error covers a suite that ran and reported failures, which for a
+    # skill demanding verification is the compliant outcome, not a missing step.
+    denied = set()
+    for ev in parsed:
+        if ev.get("type") == "result":
+            for d in ev.get("permission_denials") or []:
+                denied.add(d.get("tool_use_id"))
+
+    events = []
+    for ev in parsed:
         if ev.get("type") != "assistant":
             continue
         for block in (ev.get("message") or {}).get("content") or []:
@@ -1145,10 +1160,11 @@ def timeline(stream_lines):
             if block.get("type") == "tool_use":
                 inp = block.get("input") or {}
                 events.append({"kind": "tool", "tool": block.get("name"),
-                               "text": inp.get("command") or inp.get("file_path") or ""})
+                               "text": inp.get("command") or inp.get("file_path") or "",
+                               "ok": block.get("id") not in denied})
             elif block.get("type") == "text":
                 events.append({"kind": "text", "tool": None,
-                               "text": block.get("text") or ""})
+                               "text": block.get("text") or "", "ok": None})
     return events
 
 
@@ -1161,6 +1177,10 @@ def _matches(event, matcher, idx=None, final_idx=None):
     addressable as a step rather than guessed at from success words, which
     the skills themselves say is hopeless because paraphrases count.
     """
+    # A call the harness refused did not happen — it can neither satisfy a
+    # step nor constitute a violation. Unknown (no result seen) stays lenient.
+    if event.get("ok") is False:
+        return False
     kind = matcher.get("kind")
     if kind == "final":
         if idx != final_idx:
@@ -1232,6 +1252,21 @@ def skills_invoked(stream_lines):
     return found
 
 
+# acceptEdits lets a run edit files but refuses every Bash call, so without an
+# allowlist no eval run can execute the suite it is being scored on — it asks,
+# is refused, and the transcript still shows the request. Scoped to the test
+# runner on purpose: anything else a run reaches for is still refused, and
+# shows up as a denial rather than silently succeeding.
+EVAL_ALLOWED_TOOLS = "Bash(python3:*)"
+
+
+def eval_command(prompt, permission_mode):
+    """The argv one headless eval run is launched with."""
+    return ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
+            "--permission-mode", permission_mode,
+            "--allowedTools", EVAL_ALLOWED_TOOLS]
+
+
 def run_one(prompt, workspace, permission_mode, timeout):
     """One headless Claude run. Returns (skills_invoked, timeline, error).
 
@@ -1251,8 +1286,7 @@ def run_one(prompt, workspace, permission_mode, timeout):
             subprocess.run(["git", "add", "-A"], cwd=cwd, capture_output=True)
             subprocess.run(["git", "-c", "user.email=eval@local", "-c", "user.name=eval",
                             "commit", "-qm", "initial"], cwd=cwd, capture_output=True)
-        cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
-               "--permission-mode", permission_mode]
+        cmd = eval_command(prompt, permission_mode)
         try:
             proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
         except FileNotFoundError:
