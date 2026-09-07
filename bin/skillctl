@@ -1100,6 +1100,110 @@ def wilson(k, n, z=1.96):
     return max(0.0, centre - margin), min(1.0, centre + margin)
 
 
+def score(hits, n, baseline):
+    """One measured axis: rate, interval, and how it stands against baseline.
+
+    Only a baseline outside the interval is a real change — with 5 reps the
+    interval is wide, and calling every wobble a regression would train us to
+    ignore the column.
+    """
+    rate = hits / n if n else 0.0
+    lo, hi = wilson(hits, n)
+    verdict = None
+    if baseline is not None:
+        if baseline < lo:
+            verdict = "improved"
+        elif baseline > hi:
+            verdict = "regressed"
+        else:
+            verdict = "noise"
+    return {"hits": hits, "n": n, "rate": rate, "ci": [lo, hi],
+            "baseline": baseline, "verdict": verdict}
+
+
+def timeline(stream_lines):
+    """Every assistant event, in order, flattened to one comparable shape.
+
+    Activation only ever needed the Skill calls. Compliance needs the shape of
+    the whole session, so this keeps what a predicate can match on: which tool
+    ran, and the one string that identifies what it ran against.
+    """
+    events = []
+    for line in stream_lines:
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if ev.get("type") != "assistant":
+            continue
+        for block in (ev.get("message") or {}).get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                inp = block.get("input") or {}
+                events.append({"kind": "tool", "tool": block.get("name"),
+                               "text": inp.get("command") or inp.get("file_path") or ""})
+            elif block.get("type") == "text":
+                events.append({"kind": "text", "tool": None,
+                               "text": block.get("text") or ""})
+    return events
+
+
+def _matches(event, matcher, idx=None, final_idx=None):
+    """One timeline event against one matcher. Absent fields do not constrain.
+
+    `kind: final` is the assistant's closing message — the last prose it
+    wrote. Skills that gate a *claim* ("only then say it passes") are really
+    constraining what happened before that message, so it needs to be
+    addressable as a step rather than guessed at from success words, which
+    the skills themselves say is hopeless because paraphrases count.
+    """
+    kind = matcher.get("kind")
+    if kind == "final":
+        if idx != final_idx:
+            return False
+    elif kind is not None and event["kind"] != kind:
+        return False
+    if "tool" in matcher and not re.search(matcher["tool"], event["tool"] or ""):
+        return False
+    if "text" in matcher and not re.search(matcher["text"], event["text"]):
+        return False
+    return True
+
+
+def _final_index(events):
+    """Index of the assistant's closing prose, or None if it never spoke."""
+    for i in range(len(events) - 1, -1, -1):
+        if events[i]["kind"] == "text":
+            return i
+    return None
+
+
+def complies(events, spec):
+    """Did this run do the thing the skill exists to make it do?
+
+    `sequence` is matched as a subsequence, not a contiguous run: a skill
+    cares that the test ran before the claim, not that nothing happened in
+    between.
+    """
+    steps = spec.get("sequence") or []
+    forbidden = spec.get("forbid_before") or []
+    final_idx = _final_index(events)
+    i = 0
+    for idx, event in enumerate(events):
+        # Anything forbidden that happens before the sequence opens is the
+        # violation itself: editing before running the tests is the failure
+        # systematic-debugging exists to prevent, however the run ends.
+        if i == 0 and any(_matches(event, m, idx, final_idx) for m in forbidden):
+            return False
+        if i < len(steps) and _matches(event, steps[i], idx, final_idx):
+            i += 1
+    return i == len(steps)
+
+
 def skills_invoked(stream_lines):
     """Extract every skill name invoked, from a stream-json transcript.
 
@@ -1129,14 +1233,18 @@ def skills_invoked(stream_lines):
 
 
 def run_one(prompt, workspace, permission_mode, timeout):
-    """One headless Claude run. Returns (skills_invoked, error_or_None)."""
+    """One headless Claude run. Returns (skills_invoked, timeline, error).
+
+    The timeline was always in this transcript; until compliance scoring it
+    was parsed for Skill calls and thrown away.
+    """
     tmp = tempfile.mkdtemp(prefix="skillctl-eval-")
     try:
         cwd = tmp
         if workspace:
             src = os.path.join(EVAL_DIR, "workspaces", workspace)
             if not os.path.isdir(src):
-                return [], "no such workspace: %s" % workspace
+                return [], [], "no such workspace: %s" % workspace
             cwd = os.path.join(tmp, workspace)
             shutil.copytree(src, cwd)
             subprocess.run(["git", "init", "-q"], cwd=cwd, capture_output=True)
@@ -1148,25 +1256,34 @@ def run_one(prompt, workspace, permission_mode, timeout):
         try:
             proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
         except FileNotFoundError:
-            return [], "the `claude` CLI is not on PATH"
+            return [], [], "the `claude` CLI is not on PATH"
         except subprocess.TimeoutExpired:
-            return [], "timed out after %ds" % timeout
+            return [], [], "timed out after %ds" % timeout
         lines = proc.stdout.splitlines()
         blob = proc.stdout + proc.stderr
         if "Please run /login" in blob or "authentication_failed" in blob:
-            return [], "the `claude` CLI is not logged in — run `claude` and /login first"
+            return [], [], "the `claude` CLI is not logged in — run `claude` and /login first"
         if not lines:
-            return [], (proc.stderr.strip().splitlines() or ["no output"])[0][:120]
-        return skills_invoked(lines), None
+            return [], [], (proc.stderr.strip().splitlines() or ["no output"])[0][:120]
+        return skills_invoked(lines), timeline(lines), None
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 def cmd_eval(args):
-    """Measure how often prompts actually trigger the skills they should.
+    """Measure whether prompts trigger the right skills — and whether it mattered.
 
     Activation is stochastic — a single run cannot tell 'never' from
     'sometimes'. Repetitions plus a confidence interval can.
+
+    Firing is only half the question. A skill that activates and changes
+    nothing has not done its job, so cases carrying a `comply` block are also
+    scored on what the run actually did: the ordered tool calls, checked
+    against the behaviour the skill exists to produce. That axis is scored
+    over every rep, not only the ones that fired — a run that verified before
+    claiming is compliant whether it got there via the skill or on its own,
+    and the gap between the two columns is what says whether the skill earns
+    its place.
     """
     path = args.fixtures or os.path.join(EVAL_DIR, "fixtures.json")
     try:
@@ -1190,56 +1307,84 @@ def cmd_eval(args):
     results, failed = [], 0
     for case in cases:
         fired = 0
+        complied = 0
+        ran = 0
         seen = {}
+        spec = case.get("comply")
         for i in range(reps):
-            got, err = run_one(case["prompt"], case.get("workspace"),
-                               args.permission_mode, args.timeout)
+            got, events, err = run_one(case["prompt"], case.get("workspace"),
+                                       args.permission_mode, args.timeout)
             if err:
                 failed += 1
                 print("  %-9s %-18s rep %d: %s" % (red("error"), case["id"], i + 1, err))
                 if "not logged in" in err or "not on PATH" in err:
                     die("cannot run evals until that is fixed")
                 continue
+            ran += 1
             hit = any(s in case["expect"] for s in got)
             fired += 1 if hit else 0
+            ok = complies(events, spec) if spec else None
+            complied += 1 if ok else 0
             for s in got:
                 seen[s] = seen.get(s, 0) + 1
-            print("  %-9s %-18s rep %d/%d  %s" % (
+            comply_txt = "" if ok is None else (
+                "  " + (green("complied") if ok else red("violated")))
+            print("  %-9s %-18s rep %d/%d  %s%s" % (
                 green("fired") if hit else dim("  -  "), case["id"], i + 1, reps,
-                dim(", ".join(got) if got else "no skill")))
-        n = reps - 0
-        rate = fired / n if n else 0.0
-        lo, hi = wilson(fired, n)
-        base = case.get("baseline")
-        results.append({"id": case["id"], "expect": case["expect"], "fired": fired,
-                        "n": n, "rate": rate, "ci": [lo, hi], "baseline": base,
+                dim(", ".join(got) if got else "no skill"), comply_txt))
+        act = score(fired, ran, case.get("baseline"))
+        comp = score(complied, ran, case.get("comply_baseline")) if spec else None
+        results.append({"id": case["id"], "expect": case["expect"],
+                        "activation": act, "compliance": comp,
                         "all_skills": seen})
         print()
 
-    print(bold("%-20s %-7s %-7s %-18s %s" % ("case", "fired", "rate", "95% CI", "vs baseline")))
-    print("-" * 74)
-    regressed = 0
-    for r in results:
-        cmp_txt = dim("n/a")
-        if r["baseline"] is not None:
-            delta = r["rate"] - r["baseline"]
-            # Only a baseline outside the interval is a real change.
-            if r["baseline"] < r["ci"][0]:
-                cmp_txt = green("improved (+%.0f pts)" % (delta * 100))
-            elif r["baseline"] > r["ci"][1]:
-                cmp_txt = red("REGRESSED (%.0f pts)" % (delta * 100))
-                regressed += 1
-            else:
-                cmp_txt = dim("%+.0f pts (within noise)" % (delta * 100))
-        print("%-20s %-7s %-7s [%3.0f%%, %3.0f%%]%s %s" % (
-            r["id"], "%d/%d" % (r["fired"], r["n"]), "%.0f%%" % (r["rate"] * 100),
-            r["ci"][0] * 100, r["ci"][1] * 100, " " * 4, cmp_txt))
-    print()
-    hit = sum(r["fired"] for r in results)
-    n = sum(r["n"] for r in results)
-    lo, hi = wilson(hit, n)
-    print(bold("overall  ") + "%d/%d = %.0f%%  [%.0f%%, %.0f%%]"
-          % (hit, n, hit / n * 100 if n else 0, lo * 100, hi * 100))
+    def verdict_text(sc):
+        if sc["verdict"] is None:
+            return dim("n/a")
+        delta = (sc["rate"] - sc["baseline"]) * 100
+        if sc["verdict"] == "improved":
+            return green("improved (+%.0f pts)" % delta)
+        if sc["verdict"] == "regressed":
+            return red("REGRESSED (%.0f pts)" % delta)
+        return dim("%+.0f pts (within noise)" % delta)
+
+    def table(heading, hits_label, rows):
+        print(bold("%-20s %-7s %-7s %-18s %s"
+                   % ("case", hits_label, "rate", "95% CI", "vs baseline")))
+        print("-" * 74)
+        for rid, sc in rows:
+            ci = "[%3.0f%%, %3.0f%%]" % (sc["ci"][0] * 100, sc["ci"][1] * 100)
+            print("%-20s %-7s %-7s %-18s %s" % (
+                rid, "%d/%d" % (sc["hits"], sc["n"]),
+                "%.0f%%" % (sc["rate"] * 100), ci, verdict_text(sc)))
+        print()
+
+    def overall(label, rows):
+        hits = sum(sc["hits"] for _, sc in rows)
+        n = sum(sc["n"] for _, sc in rows)
+        lo, hi = wilson(hits, n)
+        print(bold("%-11s" % label) + "%d/%d = %.0f%%  [%.0f%%, %.0f%%]"
+              % (hits, n, hits / n * 100 if n else 0, lo * 100, hi * 100))
+
+    activation = [(r["id"], r["activation"]) for r in results]
+    compliance = [(r["id"], r["compliance"]) for r in results if r["compliance"]]
+
+    print(bold("activation") + dim("  — did the right skill fire?"))
+    table("activation", "fired", activation)
+    if compliance:
+        print(bold("compliance") + dim("  — did the run do the thing anyway?"))
+        table("compliance", "ok", compliance)
+
+    regressed = sum(1 for _, sc in activation + compliance
+                    if sc["verdict"] == "regressed")
+    overall("activation", activation)
+    if compliance:
+        overall("compliance", compliance)
+        scored = {rid for rid, _ in compliance}
+        skipped = [r["id"] for r in results if r["id"] not in scored]
+        if skipped:
+            print(dim("  no comply block, not scored: %s" % ", ".join(skipped)))
     if failed:
         print(yellow("  %d run(s) errored and were excluded" % failed))
     if reps < 10:
