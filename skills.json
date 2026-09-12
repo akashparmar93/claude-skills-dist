@@ -15,31 +15,31 @@
       }
     },
     "caveman": {
-      "hash": "sha256:2a53959c5238aec65da1fa506ab715da83216ea2365f74dfe7401d0d5fb5c317",
+      "hash": "sha256:a6e68ff071f1da42ea28b29ceacea8850bf8f91946d73964872e24263bfcb98e",
       "origin": {
         "path": "skills/caveman",
         "ref": "main",
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "81536f57b3303b7de7f5bc5b564cc344f9112d68",
+        "commit": "15581d14007fd01fb3f132016741962f34936ca2",
         "ref": "main"
       }
     },
     "caveman-help": {
-      "hash": "sha256:234f84aecf60b79d6f6de155d66d45e1fa23ec8e3d40d0b2194fe4eb37c84c2a",
+      "hash": "sha256:0b8d35655929cefd178e3f4347b87b70cad9562681fb5b37391ad535c7d963d4",
       "origin": {
         "path": "skills/caveman-help",
         "ref": "main",
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "2f49f0e1a352aa810e70056b7930aeb0b3d219b4",
+        "commit": "15581d14007fd01fb3f132016741962f34936ca2",
         "ref": "main"
       }
     },
     "code-review-skill": {
-      "hash": "sha256:ba67441fbef32161c42f7093cb905922468b82418c927a59e7f8463ce931879f",
+      "hash": "sha256:f74f496132b24e675f5325d271c5061915b1b6e8ddb5084fbc6b97e37cade028",
       "origin": {
         "include": [
           "SKILL.md",
@@ -52,7 +52,7 @@
         "repo": "awesome-skills/code-review-skill"
       },
       "pin": {
-        "commit": "277f4793018448eb08289bd54ab3c0e241a02b7b",
+        "commit": "4850184dfd7765ea7b3c5c4e9b6cf8e0815ee7cb",
         "ref": "main"
       }
     },
