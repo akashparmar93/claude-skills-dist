@@ -1110,7 +1110,12 @@ def score(hits, n, baseline):
     rate = hits / n if n else 0.0
     lo, hi = wilson(hits, n)
     verdict = None
-    if baseline is not None:
+    # n == 0 means every rep errored before producing a transcript. wilson()
+    # returns (0.0, 0.0) there, which any non-zero baseline sits above — so
+    # without this guard a wholly failed run renders as a confident
+    # "REGRESSED", which is how a broken --settings path once looked like a
+    # measurement. No runs, no verdict.
+    if baseline is not None and n:
         if baseline < lo:
             verdict = "improved"
         elif baseline > hi:
@@ -1119,6 +1124,18 @@ def score(hits, n, baseline):
             verdict = "noise"
     return {"hits": hits, "n": n, "rate": rate, "ci": [lo, hi],
             "baseline": baseline, "verdict": verdict}
+
+
+def eval_exit_code(rows):
+    """Non-zero when a run regressed *or* when it never really ran.
+
+    Suppressing the bogus verdict above must not turn a total failure into a
+    green exit: an unscored case is not a passing case.
+    """
+    for _, sc in rows:
+        if sc["verdict"] == "regressed" or sc["n"] == 0:
+            return 1
+    return 0
 
 
 def timeline(stream_lines):
@@ -1260,14 +1277,43 @@ def skills_invoked(stream_lines):
 EVAL_ALLOWED_TOOLS = "Bash(python3:*)"
 
 
-def eval_command(prompt, permission_mode):
-    """The argv one headless eval run is launched with."""
-    return ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
-            "--permission-mode", permission_mode,
-            "--allowedTools", EVAL_ALLOWED_TOOLS]
+def resolve_settings(settings, cwd=None):
+    """Make `--settings` survive the chdir into a per-run temp directory.
+
+    Accepts what the CLI accepts: a path, or a literal JSON string. A literal
+    is passed through untouched — running abspath over it would turn valid
+    JSON into a nonexistent filename and fail every rep.
+    """
+    if not settings:
+        return None
+    if settings.lstrip().startswith("{"):
+        return settings
+    return os.path.join(cwd or os.getcwd(), settings) if not os.path.isabs(settings) \
+        else settings
 
 
-def run_one(prompt, workspace, permission_mode, timeout):
+def eval_command(prompt, permission_mode, settings=None):
+    """The argv one headless eval run is launched with.
+
+    `settings` is forwarded to `claude --settings`, which loads *additional*
+    settings on top of the user's own rather than replacing them — so a run
+    with it differs from a run without it by exactly that file's contents.
+    That is what makes a hook measurable: it reaches the eval sessions and
+    nothing else on the machine, and `~/.claude/settings.json` is untouched.
+
+    Omitted entirely when nothing was asked for. The baselines recorded in
+    OPEN.md were measured with no `--settings`, and passing an empty one
+    anyway would quietly make later runs incomparable to them.
+    """
+    cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
+           "--permission-mode", permission_mode,
+           "--allowedTools", EVAL_ALLOWED_TOOLS]
+    if settings:
+        cmd += ["--settings", settings]
+    return cmd
+
+
+def run_one(prompt, workspace, permission_mode, timeout, settings=None):
     """One headless Claude run. Returns (skills_invoked, timeline, error).
 
     The timeline was always in this transcript; until compliance scoring it
@@ -1286,7 +1332,7 @@ def run_one(prompt, workspace, permission_mode, timeout):
             subprocess.run(["git", "add", "-A"], cwd=cwd, capture_output=True)
             subprocess.run(["git", "-c", "user.email=eval@local", "-c", "user.name=eval",
                             "commit", "-qm", "initial"], cwd=cwd, capture_output=True)
-        cmd = eval_command(prompt, permission_mode)
+        cmd = eval_command(prompt, permission_mode, settings)
         try:
             proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
         except FileNotFoundError:
@@ -1338,6 +1384,8 @@ def cmd_eval(args):
     print(dim("  each run is a real session and costs tokens; ^C to abort"))
     print()
 
+    settings = resolve_settings(args.settings)
+
     results, failed = [], 0
     for case in cases:
         fired = 0
@@ -1347,7 +1395,8 @@ def cmd_eval(args):
         spec = case.get("comply")
         for i in range(reps):
             got, events, err = run_one(case["prompt"], case.get("workspace"),
-                                       args.permission_mode, args.timeout)
+                                       args.permission_mode, args.timeout,
+                                       settings)
             if err:
                 failed += 1
                 print("  %-9s %-18s rep %d: %s" % (red("error"), case["id"], i + 1, err))
@@ -1374,6 +1423,8 @@ def cmd_eval(args):
         print()
 
     def verdict_text(sc):
+        if sc["n"] == 0:
+            return red("no runs — not scored")
         if sc["verdict"] is None:
             return dim("n/a")
         delta = (sc["rate"] - sc["baseline"]) * 100
@@ -1410,8 +1461,7 @@ def cmd_eval(args):
         print(bold("compliance") + dim("  — did the run do the thing anyway?"))
         table("compliance", "ok", compliance)
 
-    regressed = sum(1 for _, sc in activation + compliance
-                    if sc["verdict"] == "regressed")
+    exit_code = eval_exit_code(activation + compliance)
     overall("activation", activation)
     if compliance:
         overall("compliance", compliance)
@@ -1428,7 +1478,7 @@ def cmd_eval(args):
         with open(args.save, "w") as f:
             json.dump({"reps": reps, "results": results}, f, indent=2)
         print(dim("  wrote %s" % args.save))
-    return 1 if regressed else 0
+    return exit_code
 
 
 def cmd_seal(args):
@@ -1726,6 +1776,9 @@ def main():
                    help="passed to `claude -p` (default: acceptEdits)")
     s.add_argument("--timeout", type=int, default=600, help="per-run timeout in seconds")
     s.add_argument("--save", help="write results as JSON to this path")
+    s.add_argument("--settings", help="extra settings JSON (file or literal) for "
+                                      "the eval sessions only; merges on top of "
+                                      "your own, leaving ~/.claude untouched")
     s.set_defaults(fn=cmd_eval)
 
     s = sub.add_parser("publish", help="push the skills-only subset to the public mirror")

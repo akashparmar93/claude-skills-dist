@@ -6,10 +6,10 @@ The skills in `~/.claude/skills` encode how I want work done. They are not
 reference material to read afterwards — consult them *before* acting.
 
 **Before the first substantive action of a task, check whether a skill covers
-it, and invoke it with the Skill tool.** When several apply, invoke the most
-specific. When a skill gates work (`brainstorming`, `writing-plans`,
-`verification-before-completion`), it runs *before* that work, never as a
-retrospective write-up.
+it, and invoke it with the Skill tool.** When several apply, invoke every one
+that matches — do not pick a single winner. When a skill gates work
+(`brainstorming`, `writing-plans`, `verification-before-completion`), it runs
+*before* that work, never as a retrospective write-up.
 
 This applies to real engineering tasks — building, debugging, reviewing,
 shipping. It does not apply to conversational replies, quick lookups, or
