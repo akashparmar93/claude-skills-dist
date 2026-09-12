@@ -19,6 +19,7 @@ answering a question about existing code.
 
 | Situation | Skill |
 |---|---|
+| Auth, user input, secrets, API endpoints, payments | `security-review-checklist` |
 | New feature, component, or behaviour change — before any code | `brainstorming` |
 | Pressure-testing an idea before committing to build it | `roast` |
 | Multi-step task with a spec or requirements | `writing-plans` |
@@ -29,7 +30,6 @@ answering a question about existing code.
 | Reviewing a PR or a set of changes | `code-review-skill` |
 | Wanting my work reviewed before it lands | `requesting-code-review` |
 | Acting on review feedback I have been given | `receiving-code-review` |
-| Auth, user input, secrets, API endpoints, payments | `security-review-checklist` |
 | About to claim something is done, fixed, or passing — and before any commit or PR | `verification-before-completion` |
 | Work is complete and needs merging, a PR, or cleanup | `finishing-a-development-branch` |
 | Stopping a session so the next can start cold — "let's stop", "wrap up", handover | `handover` |
