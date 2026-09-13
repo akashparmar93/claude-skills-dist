@@ -97,14 +97,14 @@
       "origin": null
     },
     "impeccable": {
-      "hash": "sha256:45a545fa8545c50aa65e01233bfe12ca05e3cc1668d2ff9344fcd159b1c06895",
+      "hash": "sha256:7cb0d7f54cadc1778249325335660ff3f0d5568ff8ea143c338ed9fadeb80ab1",
       "origin": {
         "path": ".claude/skills/impeccable",
         "ref": "main",
         "repo": "pbakaus/impeccable"
       },
       "pin": {
-        "commit": "63b04e2530f5c7b41ea83c133daab24f34912456",
+        "commit": "cb56ed6c19a07329a9fa0cd4e657bee040156593",
         "ref": "main"
       }
     },
