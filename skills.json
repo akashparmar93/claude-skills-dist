@@ -225,14 +225,14 @@
       }
     },
     "writing-plans": {
-      "hash": "sha256:e0dd3fe342b24c3a0b4d8800f5b313e4e5b81d9eb1ee0e57adee7f90fb57a2fe",
+      "hash": "sha256:b96f84fcdd4fc87bf3264e960e7a423bf6d3612e2b3355b4d6cd5f61ef7fe45d",
       "origin": {
         "path": "skills/writing-plans",
         "ref": "main",
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797",
+        "commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
         "ref": "main"
       }
     },
