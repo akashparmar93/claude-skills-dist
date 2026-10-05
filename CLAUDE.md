@@ -33,6 +33,7 @@ answering a question about existing code.
 | About to claim something is done, fixed, or passing — and before any commit or PR | `verification-before-completion` |
 | Work is complete and needs merging, a PR, or cleanup | `finishing-a-development-branch` |
 | Stopping a session so the next can start cold — "let's stop", "wrap up", handover | `handover` |
+| Starting a session on a project that may have moved on — "pull the latest", "what's next", "open items", resume | `resume` |
 | Frontend or UI design, critique, or polish | `impeccable` |
 | Isolating feature work from the current workspace | `using-git-worktrees` |
 | Two or more genuinely independent tasks | `dispatching-parallel-agents` |

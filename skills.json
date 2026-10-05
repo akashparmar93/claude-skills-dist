@@ -144,6 +144,10 @@
         "ref": "main"
       }
     },
+    "resume": {
+      "hash": "sha256:c4186b18b6f488b11291d6214336596e6f1a4fa230abc70352e6e9ba76aaa241",
+      "origin": null
+    },
     "roast": {
       "hash": "sha256:7bded07c1ede43ce331ecece8ca6d26e5a873316f9beab4a426153bc3c07b605",
       "origin": null
