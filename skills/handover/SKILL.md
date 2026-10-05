@@ -60,16 +60,24 @@ propose a new file when there is genuinely none, and ask before creating it.
 **Every entry fills these slots. A slot with nothing in it says so.**
 
 - **Status** — one sentence. What is done and landed; what is not.
-- **Verified** — the exact commands run and their exact results, dated.
-- **Start here** — the block a cold session pastes first: get current, get
-  running, confirm green. Run it yourself before you write it down; "expected
-  output" means output you have actually seen.
+- **Verified** — the exact commands run and their exact results, dated, and
+  the machine they ran on by name (`scutil --get ComputerName`, or `hostname`).
+- **Start here** — the block a cold session pastes first: its first command
+  prints the machine name, then get current, get running, confirm green. Run it
+  yourself before you write it down; "expected output" means output you have
+  actually seen.
 - **Landed, and why** — what changed, plus the decisions made this session and
   their reasons. These exist nowhere else.
 - **Stops here** — what a cold reader would wrongly assume is finished. Green
   tests over code nothing calls belong here.
 - **Next** — the first concrete action. Open questions list their options, so
   the next session does not re-derive them.
+
+**The next session may be on a different machine.** It reads "this Mac", "this
+machine" or "here" as its own. So every fact that holds on one machine only —
+an env file, a key or token, an installed tool, a linked CLI, a running job —
+names that machine: "the CLI is linked to production on Akash's MacBook Air",
+not "on this Mac".
 
 ## 4. Land it on `main`
 
