@@ -57,6 +57,23 @@ Find the file the project already uses — `OPEN.md`, `PROGRESS.md`, a log under
 `docs/` — and match its shape and ordering. Read the previous entry first. Only
 propose a new file when there is genuinely none, and ask before creating it.
 
+**If the file you would write into is loaded automatically** — `CLAUDE.md`,
+`CLAUDE.local.md`, `.claude/CLAUDE.md`, `AGENTS.md` — the handover block
+there holds **only the latest entry**. Replace the previous entry rather
+than adding above or below it, and move every older entry, verbatim and
+newest first, to the project's existing log (`PROGRESS.md`, `OPEN.md`, a
+log under `docs/`). If there is none, create `docs/handover-log.md`
+without asking. Do it in the same commit, and say in your closing message
+how many entries moved and the file's size before and after.
+
+**If the project's own instructions say to keep every entry in that file**
+(for example "add a new entry above the previous ones"), do not pick a
+side silently. Follow the rule above, and say in the closing message that
+it overrode the project's instruction, quoting it, so the owner can change
+one or the other. An instruction only to record the handover there, such as
+the fixture's "record the handover under 'Current status'", is not a
+conflict: replacing the block still records it there.
+
 **Every entry fills these slots. A slot with nothing in it says so.**
 
 - **Status** — one sentence. What is done and landed; what is not.

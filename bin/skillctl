@@ -17,12 +17,14 @@ Python 3.9+, standard library only.
 """
 
 import argparse
+import copy
 import fnmatch
 import hashlib
 import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -51,7 +53,7 @@ IS_CLOUD = os.environ.get("CLAUDE_CODE_REMOTE") == "true"
 # What `skillctl publish` copies into the public mirror. Everything else stays
 # private: OPEN.md and SETUP.md carry device names, a private repo name and an
 # email address, and eval/ and setup-shell have no role on a cloud box.
-PUBLISH_PATHS = ["skills", "skills.json", "CLAUDE.md",
+PUBLISH_PATHS = ["skills", "skills.json", "CLAUDE.md", "hooks",
                  "bin/skillctl", "bin/cloud-setup.sh", "bin/cloud-sync.sh"]
 
 # ---------------------------------------------------------------- terminal ---
@@ -473,6 +475,14 @@ def cmd_status(args):
         "absent-in-repo": dim("none in repo"),
     }[cmd_state])
 
+    hstates = hook_states()
+    hline = hooks_line(hstates)
+    hreasons = hook_reasons(hstates)
+    print(bold("hooks            ") + (
+        red(hline) if hreasons
+        else green(hline) if hstates and all(v == "installed" for v in hstates.values())
+        else yellow(hline)))
+
     state = load_state()
     verdict, stale = check_freshness(state, m)
     checked = age_of(state.get("last_check"))
@@ -552,6 +562,7 @@ def cmd_status(args):
         reasons.append("CLAUDE.md not installed")
     elif cmd == "foreign":
         reasons.append("CLAUDE.md differs from repo")
+    reasons.extend(hreasons)
     if st["behind"]:
         reasons.append("repo %d behind" % st["behind"])
     if extra and not IS_CLOUD:
@@ -567,7 +578,8 @@ def cmd_status(args):
         green("in sync — %d/%d skills %s at %s" % (ok, total, verb, st["head"])) if healthy
         else yellow("%d/%d %s; %s" % (ok, total, verb, ", ".join(reasons)))))
     if args.json:
-        print(json.dumps({"repo": st, "skills": {n: s for n, s, _, _ in rows}, "unmanaged": extra}, indent=2))
+        print(json.dumps({"repo": st, "skills": {n: s for n, s, _, _ in rows}, "unmanaged": extra,
+                          "hooks": hstates}, indent=2))
     return 0 if healthy else 1
 
 
@@ -672,6 +684,240 @@ def sync_claude_md(args):
     return 1
 
 
+HOOKS = {"UserPromptSubmit": "size-warn.py", "Stop": "context-warn.py"}
+HOOKS_SRC = os.path.join(REPO, "hooks")
+SETTINGS = os.path.expanduser("~/.claude/settings.json")
+
+
+def hook_command(script):
+    """`python3 <path> || true`. Claude Code runs hook commands through a shell
+    and treats exit 2 as blocking; python3 exits 2 when the script is gone (a
+    deleted worktree, an old branch, a moved repo), which would block every
+    prompt. `|| true` makes that impossible and still passes stdout through."""
+    return "python3 " + shlex.quote(os.path.join(HOOKS_SRC, script)) + " || true"
+
+
+def is_our_hook(command, script):
+    """True for `python3 <dir>/hooks/<script>`, with or without a trailing
+    `|| true`, at any checkout, and nothing else: a lookalike such as
+    `python3 /x/size-warn.py` is somebody else's hook. The bare form is what
+    sync wrote before `|| true`; recognising it lets sync upgrade it in place."""
+    try:
+        parts = shlex.split(command)
+    except (ValueError, AttributeError):
+        return False
+    if parts[2:] == ["||", "true"]:
+        parts = parts[:2]
+    if len(parts) != 2 or parts[0] != "python3":
+        return False
+    path = parts[1]
+    return (os.path.basename(path) == script
+            and os.path.basename(os.path.dirname(path)) == "hooks")
+
+
+def _our_entries(settings, event, script):
+    """Every hook entry under settings.hooks[event] that is ours."""
+    for group in settings.get("hooks", {}).get(event, []):
+        if not isinstance(group, dict):
+            continue
+        inner = group.get("hooks", [])
+        if not isinstance(inner, list):
+            continue
+        for h in inner:
+            if isinstance(h, dict) and is_our_hook(h.get("command"), script):
+                yield h
+
+
+def hooks_present(settings):
+    """The scripts that have an entry of ours in settings, at whatever path."""
+    return {script for event, script in HOOKS.items()
+            if any(True for _ in _our_entries(settings, event, script))}
+
+
+def merge_hooks(settings, skip=frozenset()):
+    """Add our hooks to settings in place; True if anything changed.
+
+    Same rule as bin/cloud-setup.sh: every other key and hook is kept, ours is
+    appended as its own group. An entry of ours at another path is rewritten in
+    place even when its script is in skip -- that is a moved checkout, not a
+    removal. Event types and groups we do not own are left exactly as found.
+    """
+    changed = False
+    for event, script in HOOKS.items():
+        cmd = hook_command(script)
+        found = False
+        for h in _our_entries(settings, event, script):
+            found = True
+            if h["command"] != cmd:
+                h["command"] = cmd
+                changed = True
+        if found or script in skip:
+            continue
+        settings.setdefault("hooks", {}).setdefault(event, []).append(
+            {"hooks": [{"type": "command", "command": cmd}]})
+        changed = True
+    return changed
+
+
+def read_settings():
+    """{} when the file is absent, None when it cannot be used as it stands.
+
+    That covers a file that does not parse and one whose `hooks` is not the
+    object-of-lists shape Claude Code defines: either way, merging into it would
+    mean guessing, and sync must never overwrite what it cannot read.
+    """
+    try:
+        with open(SETTINGS, encoding="utf-8") as f:
+            settings = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        return None
+    if not isinstance(settings, dict):
+        return None
+    hooks = settings.get("hooks", {})
+    if not isinstance(hooks, dict):
+        return None
+    for event in HOOKS:
+        if not isinstance(hooks.get(event, []), list):
+            return None
+    return settings
+
+
+def recorded_hooks():
+    """The scripts state says sync installed, as a set. A malformed record reads
+    as none: a string must not become a set of its characters."""
+    recorded = load_state().get("hooks_installed", [])
+    if not isinstance(recorded, list):
+        return set()
+    return {s for s in recorded if isinstance(s, str)}
+
+
+def hook_states():
+    """script -> installed | missing | elsewhere | removed; None if settings is unusable.
+
+    elsewhere: an entry of ours exists but none runs this checkout's script.
+    installed: an entry runs exactly this checkout's command (wins over a stale
+    duplicate, since the hook does fire). removed: no entry, but sync installed
+    it once -- the owner deleted it, which is their call.
+    """
+    settings = read_settings()
+    if settings is None:
+        return None
+    recorded = recorded_hooks()
+    states = {}
+    for event, script in HOOKS.items():
+        commands = [h.get("command") for h in _our_entries(settings, event, script)]
+        if hook_command(script) in commands:
+            states[script] = "installed"
+        elif commands:
+            states[script] = "elsewhere"
+        elif script in recorded:
+            states[script] = "removed"
+        else:
+            states[script] = "missing"
+    return states
+
+
+def hooks_line(states):
+    if states is None:
+        return "settings.json does not parse — not checked"
+    if all(v == "installed" for v in states.values()):
+        return "installed (%d/%d)" % (len(states), len(states))
+    parts = []
+    for state, label in (("missing", "missing: %s"),
+                         ("elsewhere", "points elsewhere: %s"),
+                         ("removed", "removed by you: %s (sync --force restores)")):
+        scripts = [s for s, v in states.items() if v == state]
+        if scripts:
+            parts.append(label % ", ".join(scripts))
+    return "; ".join(parts)
+
+
+def hook_reasons(states):
+    """Verdict reasons. A removed hook is the owner's choice, never a fault."""
+    if states is None:
+        return ["settings.json unreadable"]
+    reasons = []
+    if "missing" in states.values():
+        reasons.append("hooks missing")
+    if "elsewhere" in states.values():
+        reasons.append("hooks point elsewhere")
+    return reasons
+
+
+def in_linked_worktree(path):
+    """True if path is inside a linked git worktree (its git dir and common git
+    dir differ). False for a main checkout, a plain clone, or when git is
+    missing or fails: this check must never stand in the way of a sync."""
+    def rev_parse(flag):
+        r = subprocess.run(["git", "-C", path, "rev-parse", flag],
+                           capture_output=True, text=True, timeout=10)
+        out = r.stdout.strip()
+        if r.returncode != 0 or not out:
+            return None
+        return os.path.realpath(os.path.join(path, out))
+    try:
+        git_dir, common = rev_parse("--git-dir"), rev_parse("--git-common-dir")
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return bool(git_dir and common) and git_dir != common
+
+
+def sync_hooks(args):
+    """Register the warn hooks in ~/.claude/settings.json.
+
+    A hook the owner deletes by hand stays deleted: state remembers what sync
+    has installed, and a recorded script with no entry left is not re-added
+    unless --force. Cloud sessions run `sync --force`, so there it always is.
+
+    Not from a linked worktree unless --force: the registered path would vanish
+    when the worktree is removed.
+    """
+    if not args.force and in_linked_worktree(REPO):
+        print(yellow("  hooks   ") + "not registered from a worktree (%s) — run sync "
+              "from the main checkout, or --force" % REPO)
+        return 0
+    settings = read_settings()
+    if settings is None:
+        print(red("  hooks   ") + "settings.json does not parse — hooks not registered; "
+              "fix it and re-run sync")
+        return 0
+    recorded = recorded_hooks()
+    present = hooks_present(settings)
+    skip = set() if args.force else recorded - present
+    for script in sorted(skip):
+        print(dim("  removed ") + "%s — deleted by hand, left out (sync --force restores it)"
+              % script)
+    before = copy.deepcopy(settings)
+    changed = merge_hooks(settings, skip)
+    if changed:
+        for event, script in HOOKS.items():
+            if before.get("hooks", {}).get(event) != settings.get("hooks", {}).get(event):
+                print(green("  hook    ") + "%s -> %s" % (event, script))
+        if not args.dry_run:
+            # Serialize and encode before opening: opening for write truncates, so
+            # an encoding error (a lone surrogate loads fine) must surface first.
+            try:
+                data = (json.dumps(settings, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+            except ValueError as e:
+                print(red("  hooks   ") + "cannot write settings.json (%s) — left untouched" % e)
+                return 0
+            try:
+                os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
+                # Write in place, not a rename: keeps a symlinked file a symlink.
+                with open(SETTINGS, "wb") as f:
+                    f.write(data)
+            except OSError as e:
+                print(red("  hooks   ") + "could not write %s: %s" % (SETTINGS, e))
+                return 0
+    if not args.dry_run:
+        now = recorded | hooks_present(settings)
+        if now != recorded:
+            save_state(hooks_installed=sorted(now))
+    return 1 if changed else 0
+
+
 def cmd_sync(args):
     m = load_manifest()
     os.makedirs(INSTALL_DIR, exist_ok=True)
@@ -727,6 +973,7 @@ def cmd_sync(args):
         changed += 1
 
     changed += sync_claude_md(args)
+    changed += sync_hooks(args)
 
     extra = [d for d in sorted(os.listdir(INSTALL_DIR))
              if d not in m["skills"] and not d.startswith(".") and not d.endswith(".bak-skillctl")]
@@ -1606,7 +1853,9 @@ every session. Skills installed that way are registered in the same session.
 
 `skills/` — %(count)d skills, `skills.json` — the manifest they are pinned by,
 `CLAUDE.md` — the routing table that makes them fire, `bin/skillctl` — the
-sync tool, `bin/cloud-*.sh` — the cloud bootstrap and hook.
+sync tool, `bin/cloud-*.sh` — the cloud bootstrap and hook,
+`hooks/` — two warn-only hooks (instruction-file size, context size) that
+`skillctl sync` registers.
 
 Most of the skills are vendored from public upstreams; `skills.json` records
 each one's origin repo and pinned commit. Credit belongs to their authors.
