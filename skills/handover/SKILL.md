@@ -58,14 +58,23 @@ Find the file the project already uses — `OPEN.md`, `PROGRESS.md`, a log under
 propose a new file when there is genuinely none, and ask before creating it.
 
 **If the file you would write into is loaded automatically** — `CLAUDE.md`,
-`CLAUDE.local.md`, `.claude/CLAUDE.md`, `AGENTS.md` — the handover block
-there holds **only the latest entry**. Replace the previous entry rather
-than adding above or below it, and move every older entry, verbatim, in
-the log's own order (a new log keeps the order they had), to the project's
-existing log (`PROGRESS.md`, `OPEN.md`, a log under `docs/`). If there is
-none, create `docs/handover-log.md` without asking. Do it in the same
-commit, and say in your closing message how many entries moved and the
-file's size before and after.
+`CLAUDE.local.md`, `.claude/CLAUDE.md`, `AGENTS.md` — every byte of it is
+re-sent on every turn. The full entry goes in the project's log
+(`PROGRESS.md`, `OPEN.md`, a log under `docs/`; if there is none, create
+`docs/handover-log.md` without asking), and the handover block holds a
+short view of **only the latest entry**:
+
+1. Write the full entry into the log, in the log's own order.
+2. Clear the block's older entries. One whose full version the log already
+   has is dropped. Every other one moves to the log verbatim, in the log's
+   own order (a new log keeps the order they had).
+3. Write the short view into the block: every slot as in the full entry,
+   except **Landed, and why**, which is one line per change or decision,
+   naming where its reasons are written — the log entry, a commit, a spec
+   or plan section.
+
+Do it in the same commit, and say in your closing message how many entries
+moved and the file's size before and after.
 
 **If the project's own instructions say to keep every entry in that file**
 (for example "add a new entry above the previous ones"), do not pick a
