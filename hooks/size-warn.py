@@ -24,7 +24,7 @@ unparseable input means no output and exit 0.
 
 Markers live at <home>/.claude/state/size-warn/<session_id>. One is written
 for every session on its first prompt, warned or not, so the files are
-measured once. Stdlib only; runs on Python 3.9.
+measured once. Stdlib only; runs on Python 3.13+.
 """
 
 import json

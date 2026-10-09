@@ -10,7 +10,7 @@ told) and never decision (the stop is never blocked). Fail silent: any error,
 missing file or unparseable input means no output and exit 0.
 
 Markers live at <home>/.claude/state/context-warn/<session_id>.<threshold>.
-Stdlib only; runs on Python 3.9.
+Stdlib only; runs on Python 3.13+.
 """
 
 import json

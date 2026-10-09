@@ -13,7 +13,7 @@ here, so `git pull` is the whole update mechanism.
   skillctl vendor <name>     pull upstream in and re-pin
   skillctl adopt  <name>     bring an unmanaged local skill into the repo
 
-Python 3.9+, standard library only.
+Python 3.13+, standard library only.
 """
 
 import argparse

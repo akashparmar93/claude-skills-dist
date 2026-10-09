@@ -2,7 +2,7 @@
 
 A marker is an empty file whose existence means "already warned". It is written
 before a message is shown, so a failed write means the hook stays silent rather
-than repeating itself on every run. Stdlib only; runs on Python 3.9.
+than repeating itself on every run. Stdlib only; runs on Python 3.13+.
 """
 
 import os
