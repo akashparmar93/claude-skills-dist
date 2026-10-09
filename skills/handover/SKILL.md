@@ -69,9 +69,13 @@ short view of **only the latest entry**:
    has is dropped. Every other one moves to the log verbatim, in the log's
    own order (a new log keeps the order they had).
 3. Write the short view into the block: every slot as in the full entry,
-   except **Landed, and why**, which is one line per change or decision,
-   naming where its reasons are written — the log entry, a commit, a spec
-   or plan section.
+   except two:
+   - **Verified** is one line: the machine, the time, the headline results
+     (`make test` -> `Ran 31 tests ... OK`, lint clean), and a pointer to
+     the log entry, which keeps every command and its result.
+   - **Landed, and why** is one line per change or decision, naming where
+     its reasons are written — the log entry, a commit, a spec or plan
+     section.
 
 Do it in the same commit, and say in your closing message how many entries
 moved and the file's size before and after.
