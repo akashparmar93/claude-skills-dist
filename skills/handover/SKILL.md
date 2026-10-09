@@ -46,10 +46,18 @@ Never land a *failing* test on `main`.
 
 **REQUIRED SUB-SKILL:** verification-before-completion.
 
-Run the project's test, build and lint commands and read the output. The entry
-records what you *ran* and what it *said* — never "tests pass" from memory. If
-something is broken, the entry says so. A handover that hides a failure costs
-the next session more than the failure does.
+Write the **Start here** block (§3) first and run it verbatim. Its test run is
+the Verified test run: the suite runs once, there. Then run what the block does
+not — lint, build, server checks — and read the output. The entry records what
+you *ran* and what it *said* — never "tests pass" from memory. If something is
+broken, the entry says so. A handover that hides a failure costs the next
+session more than the failure does.
+
+**CI is recorded, not waited on.** Read `gh run list` once. A run that is
+queued or in progress is recorded as pending, with its run id and commit, in
+Verified and in Stops here, and Start here gets `gh run list --commit <sha>`
+so the next session reads the result. The same holds for the run your own push
+starts in §4.
 
 ## 3. Write the entry
 
@@ -94,9 +102,10 @@ the block still records it there.
 - **Verified** — the exact commands run and their exact results, dated, and
   the machine they ran on by name (`scutil --get ComputerName`, or `hostname`).
 - **Start here** — the block a cold session pastes first: its first command
-  prints the machine name, then get current, get running, confirm green. Run it
-  yourself before you write it down; "expected output" means output you have
-  actually seen.
+  prints the machine name, then get current, get running, confirm green, and
+  `gh run list --commit <sha>` for any CI run left pending. Run it yourself
+  before you write it down; "expected output" means output you have actually
+  seen.
 - **Landed, and why** — what changed, plus the decisions made this session and
   their reasons. These exist nowhere else.
 - **Stops here** — what a cold reader would wrongly assume is finished. Green
@@ -142,6 +151,8 @@ and anything left for them.
 |---|---|
 | "It's one more line, I'll just finish it" | Is the test already written? Green without a design decision? If not — park it. |
 | Write "all tests pass" | Run them. Record what they said. |
+| Run the suite again before committing | The Start here run is the Verified run. Once. |
+| `gh run watch` until CI finishes | Record the run id as pending; Start here checks it. |
 | Leave an untracked scratch file "for them to delete" | Commit it, delete it, or ignore it. A cold session opens a clean tree. |
 | Push the branch and stop | Merge to `main`. A branch is not a handover. |
 | `pkill -f python` | Find the pid you started. Kill that one. |
