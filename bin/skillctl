@@ -1049,7 +1049,7 @@ def _check_one(name, spec):
 def cmd_check(args):
     m = load_manifest()
     names = [args.name] if args.name else sorted(m["skills"])
-    stale = 0
+    stale = errors = 0
     print(bold("checking %d skill(s) against upstream…" % len(names)))
     print()
     for name in names:
@@ -1060,6 +1060,7 @@ def cmd_check(args):
             continue
         if r["state"] == "error":
             print("  %-9s %-32s %s" % (red("error"), name, r["detail"]))
+            errors += 1
             continue
         moved = r["pin"] != r["latest"]
         if r["state"] == "current":
@@ -1085,9 +1086,17 @@ def cmd_check(args):
         if rest > 0:
             print(dim("              … and %d more" % rest))
     print()
-    print(green("all vendored skills are current") if not stale
-          else bold("%d skill(s) have upstream changes" % stale)
-               + dim("   review: skillctl diff <name>   adopt: skillctl vendor <name>"))
+    if stale:
+        print(bold("%d skill(s) have upstream changes" % stale)
+              + dim("   review: skillctl diff <name>   adopt: skillctl vendor <name>"))
+    elif not errors:
+        print(green("all vendored skills are current"))
+    if errors:
+        # An errored lookup proves nothing either way, so this sweep must not
+        # replace the last record: saving it would claim those skills current.
+        print(red("%d skill(s) could not be checked" % errors)
+              + dim("   previous check record kept"))
+        return 1
     if not args.name:  # only a full sweep is a meaningful freshness record
         save_state(last_check=now_iso(), last_check_stale_count=stale,
                    last_check_pins=pin_fingerprint(m),
