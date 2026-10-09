@@ -50,6 +50,11 @@ IGNORE = {".DS_Store", ".git", "__pycache__", ".in_use"}
 # on every cloud session and destroy the "exit 0 = in sync" contract.
 IS_CLOUD = os.environ.get("CLAUDE_CODE_REMOTE") == "true"
 
+# The Claude desktop app writes the same account-level sync into this one
+# directory on a Mac (first seen 2026-10-09). It is the app's, not ours, so it
+# is platform there too — otherwise the login check warns in every new shell.
+DESKTOP_SYNC = "synced"
+
 # What `skillctl publish` copies into the public mirror. Everything else stays
 # private: OPEN.md and SETUP.md carry device names, a private repo name and an
 # email address, and eval/ and setup-shell have no role on a cloud box.
@@ -542,13 +547,11 @@ def cmd_status(args):
             dim(note)))
 
     print()
-    extra = [d for d in sorted(os.listdir(INSTALL_DIR))
-             if d not in skills and not d.startswith(".")
-             and not d.endswith(".bak-skillctl")] if os.path.isdir(INSTALL_DIR) else []
-    if extra and IS_CLOUD:
-        print(dim("  platform:  ") + dim(", ".join(extra) + "  (provided by the cloud image / account sync)"))
-    elif extra:
-        print(yellow("  unmanaged: ") + ", ".join(extra) + dim("  (run: skillctl adopt <name>)"))
+    platform, unmanaged = extra_dirs(skills)
+    if platform:
+        print(dim("  platform:  ") + dim(", ".join(platform) + "  (provided by the cloud image / account sync)"))
+    if unmanaged:
+        print(yellow("  unmanaged: ") + ", ".join(unmanaged) + dim("  (run: skillctl adopt <name>)"))
 
     warn_legacy_backups()
 
@@ -565,8 +568,8 @@ def cmd_status(args):
     reasons.extend(hreasons)
     if st["behind"]:
         reasons.append("repo %d behind" % st["behind"])
-    if extra and not IS_CLOUD:
-        reasons.append("%d unmanaged" % len(extra))
+    if unmanaged:
+        reasons.append("%d unmanaged" % len(unmanaged))
     stale = legacy_backups()
     if stale:
         # Not cosmetic: each one is loaded as a duplicate skill, so this device
@@ -578,8 +581,8 @@ def cmd_status(args):
         green("in sync — %d/%d skills %s at %s" % (ok, total, verb, st["head"])) if healthy
         else yellow("%d/%d %s; %s" % (ok, total, verb, ", ".join(reasons)))))
     if args.json:
-        print(json.dumps({"repo": st, "skills": {n: s for n, s, _, _ in rows}, "unmanaged": extra,
-                          "hooks": hstates}, indent=2))
+        print(json.dumps({"repo": st, "skills": {n: s for n, s, _, _ in rows}, "unmanaged": unmanaged,
+                          "platform": platform, "hooks": hstates}, indent=2))
     return 0 if healthy else 1
 
 
@@ -627,6 +630,22 @@ def legacy_backups():
     if not os.path.isdir(INSTALL_DIR):
         return []
     return [d for d in sorted(os.listdir(INSTALL_DIR)) if d.endswith(".bak-skillctl")]
+
+
+def extra_dirs(managed):
+    """Install-dir entries the manifest does not name, as (platform, unmanaged).
+
+    Platform is everything in a cloud container, and DESKTOP_SYNC anywhere.
+    Only unmanaged entries are candidates for `adopt` or count against status.
+    """
+    if not os.path.isdir(INSTALL_DIR):
+        return [], []
+    extra = [d for d in sorted(os.listdir(INSTALL_DIR))
+             if d not in managed and not d.startswith(".") and not d.endswith(".bak-skillctl")]
+    if IS_CLOUD:
+        return extra, []
+    return ([d for d in extra if d == DESKTOP_SYNC],
+            [d for d in extra if d != DESKTOP_SYNC])
 
 
 def warn_legacy_backups():
@@ -975,13 +994,11 @@ def cmd_sync(args):
     changed += sync_claude_md(args)
     changed += sync_hooks(args)
 
-    extra = [d for d in sorted(os.listdir(INSTALL_DIR))
-             if d not in m["skills"] and not d.startswith(".") and not d.endswith(".bak-skillctl")]
-    for name in extra:
-        if IS_CLOUD:
-            print(dim("  platform  ") + "%s (cloud image / account sync — left alone)" % name)
-        else:
-            print(yellow("  extra   ") + "%s — not in manifest (skillctl adopt %s, or delete it)" % (name, name))
+    platform, unmanaged = extra_dirs(m["skills"])
+    for name in platform:
+        print(dim("  platform  ") + "%s (cloud image / account sync — left alone)" % name)
+    for name in unmanaged:
+        print(yellow("  extra   ") + "%s — not in manifest (skillctl adopt %s, or delete it)" % (name, name))
 
     warn_legacy_backups()
 
