@@ -3,14 +3,14 @@
   "mirror": "https://github.com/akashparmar93/claude-skills-dist",
   "skills": {
     "brainstorming": {
-      "hash": "sha256:a70fba9bbe817b48ee9211cafaf2bfea2cf253d2d87fc51b75ffd4d0cca3be7a",
+      "hash": "sha256:01b66470352a1c04148a55f15ffc4450363f00713b1c46df05bb4bd80ad61b24",
       "origin": {
         "path": "skills/brainstorming",
         "ref": "main",
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
+        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
         "ref": "main"
       }
     },
