@@ -180,9 +180,11 @@ def _read_with_retry(req, attempts=3):
     for i in range(attempts):
         try:
             return urllib.request.urlopen(req, timeout=60).read()
-        except (http.client.IncompleteRead, ConnectionError):
+        except (http.client.IncompleteRead, ConnectionError) as e:
             if i == attempts - 1:
                 raise
+            print(dim("  %s from GitHub; retrying in %ds (attempt %d of %d)"
+                      % (type(e).__name__, 2 ** i, i + 2, attempts)), file=sys.stderr)
             time.sleep(2 ** i)
 
 
