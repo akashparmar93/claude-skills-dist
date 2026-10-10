@@ -20,6 +20,7 @@ import argparse
 import copy
 import fnmatch
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -30,6 +31,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
@@ -171,13 +173,26 @@ def api_token():
         return None
 
 
+def _read_with_retry(req, attempts=3):
+    """A read cut short (IncompleteRead) or a dropped connection is retried;
+    an HTTPError is GitHub's answer and is raised at once. A URLError, such as
+    a missing CA file, is raised at once too: retrying cannot fix it."""
+    for i in range(attempts):
+        try:
+            return urllib.request.urlopen(req, timeout=60).read()
+        except (http.client.IncompleteRead, ConnectionError):
+            if i == attempts - 1:
+                raise
+            time.sleep(2 ** i)
+
+
 def gh(url):
     req = urllib.request.Request(url, headers={"User-Agent": "skillctl", "Accept": "application/vnd.github+json"})
     tok = api_token()
     if tok:
         req.add_header("Authorization", "Bearer " + tok)
     try:
-        return urllib.request.urlopen(req, timeout=60).read()
+        return _read_with_retry(req)
     except urllib.error.HTTPError as e:
         if e.code in (403, 429):
             if IS_CLOUD:
