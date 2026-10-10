@@ -15,26 +15,26 @@
       }
     },
     "caveman": {
-      "hash": "sha256:05bfd0cbf407d2dd1d7e9b058f0cd9c30cf0ce613579ecbcf3d961127cf00e2b",
+      "hash": "sha256:8dd75b3ad1dccebfc375f3ec73e714b02ef5666791416f228d8ebc53c8540597",
       "origin": {
         "path": "skills/caveman",
         "ref": "main",
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "6571943370f7c9d4de1946481177ee7b306cd8e8",
+        "commit": "2e08b9177c07bb7249a8a2d1a6758e5db281d002",
         "ref": "main"
       }
     },
     "caveman-help": {
-      "hash": "sha256:a13aa12e6098d63163cad5a1d511d44c65d95635a86b6cdd12ec3dd73c3af9ca",
+      "hash": "sha256:6610948e4a0f73e1badbc047a58c31264ea88119969d76da19b48f3ee32988f5",
       "origin": {
         "path": "skills/caveman-help",
         "ref": "main",
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "6571943370f7c9d4de1946481177ee7b306cd8e8",
+        "commit": "2e08b9177c07bb7249a8a2d1a6758e5db281d002",
         "ref": "main"
       }
     },
@@ -97,14 +97,14 @@
       "origin": null
     },
     "impeccable": {
-      "hash": "sha256:9c695db970c913eae864282383d1f34f1b495e67aecb4bb9af3a834e030774eb",
+      "hash": "sha256:8fb21d1ac7f307e80f35d31e860ebdfccb0ca49065210d5ada6436dda388a782",
       "origin": {
         "path": ".claude/skills/impeccable",
         "ref": "main",
         "repo": "pbakaus/impeccable"
       },
       "pin": {
-        "commit": "ece38d9904b8a619b3f77cab476eacad09c4fb11",
+        "commit": "d631a8827f99414d2b6daba4ef08b7f8701751d7",
         "ref": "main"
       }
     },
@@ -121,14 +121,14 @@
       }
     },
     "megacave": {
-      "hash": "sha256:c2ac0c46453276249275e7cc63c9493d43002cc99442783f9a8f0c16a9347b6d",
+      "hash": "sha256:9df6cea312a94ea0c8646cac319c2b7240ee9310d192ec9e995a9c029c5f85f9",
       "origin": {
         "path": "skills/megacave",
         "ref": "main",
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "6571943370f7c9d4de1946481177ee7b306cd8e8",
+        "commit": "2e08b9177c07bb7249a8a2d1a6758e5db281d002",
         "ref": "main"
       }
     },
@@ -205,14 +205,14 @@
       }
     },
     "ultracave": {
-      "hash": "sha256:3b210561b99eda2edf0b3857ebd725ad2366a7785368a1f994ca9c6e7ada9c70",
+      "hash": "sha256:84a5b6957c0a353e26f430569c92aba78e3c97c5d372fa37371bfc259e3256bf",
       "origin": {
         "path": "skills/ultracave",
         "ref": "main",
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "6571943370f7c9d4de1946481177ee7b306cd8e8",
+        "commit": "2e08b9177c07bb7249a8a2d1a6758e5db281d002",
         "ref": "main"
       }
     },
