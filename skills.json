@@ -69,14 +69,14 @@
       }
     },
     "executing-plans": {
-      "hash": "sha256:6929a96d5c1a22522a43284c98e246c62dff3dea044cd766c1535b8500770a1d",
+      "hash": "sha256:6a78feadeb4fc5a41d751cc5ed01ccba53e55d01fe3e63031114cefd6b92b0ce",
       "origin": {
         "path": "skills/executing-plans",
         "ref": "main",
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
+        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
         "ref": "main"
       }
     },
@@ -145,14 +145,14 @@
       }
     },
     "requesting-code-review": {
-      "hash": "sha256:e70a585c7a129907ca7f9fa8775866c4aae969f707c8da6d81178d5b5931d52f",
+      "hash": "sha256:da21da5cdf7894945c3990bdea317b1be4e2cf553831d22027558ca45a6cc45b",
       "origin": {
         "path": "skills/requesting-code-review",
         "ref": "main",
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
+        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
         "ref": "main"
       }
     },
@@ -169,26 +169,26 @@
       "origin": null
     },
     "subagent-driven-development": {
-      "hash": "sha256:82c02535618f6b0c5ef3c377e588873b0ec2a7b6c03a0029210721b30d2cc48d",
+      "hash": "sha256:7e4d873926af5e6b862214d334c0c03ce9d961553bd46bf524c9a0c4e86841fe",
       "origin": {
         "path": "skills/subagent-driven-development",
         "ref": "main",
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
+        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
         "ref": "main"
       }
     },
     "systematic-debugging": {
-      "hash": "sha256:37fd06e80f296251caf4eb3554ab8771d7cf14ba382efcf812d8f3247d64dcbe",
+      "hash": "sha256:7c2628773e52f1687e74f9d802f2ea1c2cbae24ef5ca3fda0b8f21340f50d590",
       "origin": {
         "path": "skills/systematic-debugging",
         "ref": "main",
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
+        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
         "ref": "main"
       }
     },
