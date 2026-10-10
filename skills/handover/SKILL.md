@@ -46,9 +46,9 @@ Never land a *failing* test on `main`.
 
 **REQUIRED SUB-SKILL:** verification-before-completion.
 
-Write the **Start here** block (§3) first and run it verbatim. Its test run is
-the Verified test run: the suite runs once, there. Then run what the block does
-not — lint, build, server checks — and read the output. The entry records what
+Write the **Start here** block (§3) first, all of it, and run it verbatim.
+Its test run is the Verified test run: the suite runs once, there. Then run
+what the block does not — lint, build, server checks — and read the output. The entry records what
 you *ran* and what it *said* — never "tests pass" from memory. If something is
 broken, the entry says so. A handover that hides a failure costs the next
 session more than the failure does.
@@ -77,13 +77,21 @@ short view of **only the latest entry**:
    has is dropped. Every other one moves to the log verbatim, in the log's
    own order (a new log keeps the order they had).
 3. Write the short view into the block: every slot as in the full entry,
-   except two:
+   except these:
    - **Verified** is one line: the machine, the time, the headline results
      (`make test` -> `Ran 31 tests ... OK`, lint clean), and a pointer to
      the log entry, which keeps every command and its result.
    - **Landed, and why** is one line per change or decision, naming where
      its reasons are written — the log entry, a commit, a spec or plan
      section.
+   - **Start here**, when the block is more than five lines: the whole block
+     goes in the project's Start here file, replacing what it held —
+     `docs/start-here.md` unless the project keeps one elsewhere; create it
+     without asking. The slot is one line naming that file, then the two or
+     three commands that matter most (machine name, get current, confirm
+     green).
+   - **Stops here**: an item carried from an earlier entry is one line,
+     naming where its full text is written — the log entry that has it.
 
 Do it in the same commit, and say in your closing message how many entries
 moved and the file's size before and after.

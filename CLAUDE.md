@@ -47,9 +47,11 @@ does not name one.
 
 - Skill descriptions alone have not reliably triggered activation; this table is
   the mechanism, so prefer it over waiting for a description to match.
-- Skills are symlinks into `~/Documents/Claude/Skills`, which is the
-  single source of truth across all my devices. Edit skills there, never in
-  `~/.claude/skills`. See that repo's `SETUP.md`.
+- Skills are symlinks into a clone of the skills repo, which is the single
+  source of truth across all my devices: `~/Documents/Claude/claude-skills`
+  on the MacBook Air, `~/Documents/Claude/Skills` on the Mac Studio
+  (`readlink ~/.claude/skills/roast` shows which). Edit skills there, never
+  in `~/.claude/skills`. See that repo's `SETUP.md`.
 - In a Claude Code **cloud** session the symlinks point at
   `~/.claude/claude-skills` instead — a read-only clone of the public mirror,
   refreshed each session by a SessionStart hook. Edits made there are wiped on
