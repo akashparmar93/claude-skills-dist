@@ -1,6 +1,12 @@
 {
   "install_dir": "~/.claude/skills",
   "mirror": "https://github.com/akashparmar93/claude-skills-dist",
+  "mods": {
+    "next-steps@claude-community": {
+      "source": "anthropics/claude-plugins-community",
+      "version": "1.0.0"
+    }
+  },
   "skills": {
     "brainstorming": {
       "hash": "sha256:01b66470352a1c04148a55f15ffc4450363f00713b1c46df05bb4bd80ad61b24",

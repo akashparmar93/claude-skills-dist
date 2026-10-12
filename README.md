@@ -25,8 +25,9 @@ every session. Skills installed that way are registered in the same session.
 `skills/` — 25 skills, `skills.json` — the manifest they are pinned by,
 `CLAUDE.md` — the routing table that makes them fire, `bin/skillctl` — the
 sync tool, `bin/cloud-*.sh` — the cloud bootstrap and hook,
-`hooks/` — two warn-only hooks (instruction-file size, context size) that
-`skillctl sync` registers.
+`hooks/` — three hooks that `skillctl sync` registers: two warn-only ones
+(instruction-file size, context size) and `session-sync.py`, which pulls and
+syncs at the start of every session on a Mac and does nothing in cloud.
 
 Most of the skills are vendored from public upstreams; `skills.json` records
 each one's origin repo and pinned commit. Credit belongs to their authors.

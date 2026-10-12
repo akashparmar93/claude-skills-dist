@@ -8,6 +8,9 @@ here, so `git pull` is the whole update mechanism.
 
   skillctl status            where this device stands (local, no network)
   skillctl sync              make ~/.claude/skills match the manifest
+  skillctl update            every skill and mod to upstream latest; commit, push
+  skillctl remove <name>     a skill or mod off every device; commit, push
+  skillctl approve <mod-id>  approve the command a mod is waiting on
   skillctl check             which vendored skills have upstream updates
   skillctl diff  <name>      what changed upstream since the pin
   skillctl vendor <name>     pull upstream in and re-pin
@@ -27,6 +30,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
@@ -379,7 +383,8 @@ CHECK_AGE_LIMIT = 7 * 86400
 
 
 def pin_fingerprint(manifest):
-    """Digest of every input `check` compares against upstream.
+    """Digest of every input `check` compares against upstream: each vendored
+    skill's pin and content, and each mod's recorded version.
 
     Keyed on the pins and vendored content rather than on HEAD: most commits
     here are docs and CI, and invalidating the record on each of them would cry
@@ -400,6 +405,11 @@ def pin_fingerprint(manifest):
             (spec.get("pin") or {}).get("commit", ""),
             spec.get("hash", ""),
         )))
+    # `check` counts mod updates into its record too, so an `update` that
+    # moves only a mod must supersede it. No mods leaves the digest as it was.
+    for mod_id, spec in sorted(manifest_mods(manifest).items()):
+        version = spec.get("version")
+        parts.append("mod\t%s\t%s" % (mod_id, version if isinstance(version, str) else ""))
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
@@ -430,12 +440,14 @@ def check_freshness(state, manifest, age_limit=CHECK_AGE_LIMIT):
     return "fresh", stale
 
 
-def repo_state():
+def repo_state(strict=False):
+    """strict: behind and ahead are None when there is no upstream to count
+    against (none configured, detached HEAD), rather than reading as level."""
     head = git("rev-parse", "--short", "HEAD") or "?"
     branch = git("rev-parse", "--abbrev-ref", "HEAD") or "?"
     dirty = bool(git("status", "--porcelain"))
     counts = git("rev-list", "--left-right", "--count", "@{upstream}...HEAD")
-    behind = ahead = 0
+    behind = ahead = None if strict else 0
     if counts and "\t" in counts:
         b, a = counts.split("\t")[:2]
         behind, ahead = int(b), int(a)
@@ -460,6 +472,31 @@ def install_state(name):
 
 
 # ------------------------------------------------------------------ commands ---
+
+
+def print_mod_rows(m, states, installed):
+    """The `mods` block of `status`, one row per mod in `mod_states`."""
+    listed = manifest_mods(m)
+    print(bold("mods"))
+    w = max(len(i) for i in states) if states else 10
+    for mod_id, state in states.items():
+        version = (listed.get(mod_id) or {}).get("version")
+        here = (installed.get(mod_id) or {}).get("version")
+        text = {
+            "installed": green("ok"),
+            "missing": red("missing — not installed, run: skillctl sync"),
+            "removed": yellow("removed — uninstalled here; the next sync removes it "
+                              "everywhere (reinstall it to keep it)"),
+            "behind": red("behind — not at the recorded version, run: skillctl sync"),
+            "differs": yellow("differs — here %s, recorded %s (skillctl update records "
+                              "the latest)" % (here or "?", version or "?")),
+            "waiting": yellow("waiting — skillctl approve %s" % mod_id),
+            "disabled": dim("off — disabled here"),
+            "unlisted": dim("unlisted — the next sync uninstalls it"),
+            "extra": dim("extra — installed by hand, not listed"),
+        }[state]
+        print("  %-*s  %s%s" % (w, mod_id, text,
+                                dim("  " + version) if isinstance(version, str) else ""))
 
 
 def cmd_status(args):
@@ -520,13 +557,25 @@ def cmd_status(args):
     elif verdict == "aged":
         print(bold("upstreams        ") + "checked %s%s" % (
             checked,
-            red(" — %d skill(s) had updates" % stale) if stale
+            red(" — %d skill(s) or mod(s) had updates" % stale) if stale
             else yellow(" — none then; upstream may have moved since")))
     else:
         print(bold("upstreams        ") + "checked %s%s" % (
             checked,
-            red(" — %d skill(s) had updates" % stale) if stale
+            red(" — %d skill(s) or mod(s) had updates" % stale) if stale
             else green(" — all current")))
+    # Written by hooks/session-sync.py. No record is no line: a machine that
+    # has never run the hook is not at fault.
+    autosync = state.get("autosync")
+    autosync_failed = False
+    if isinstance(autosync, dict) and isinstance(autosync.get("result"), str):
+        result = autosync["result"]
+        autosync_failed = result.startswith("failed:")
+        age = age_of(autosync.get("at"))
+        text = result + (", " + age if age else "")
+        print(bold("autosync         ") + (
+            red(text) if autosync_failed
+            else yellow(text) if result.startswith("skipped:") else text))
     print()
 
     rows, tally = [], {}
@@ -563,6 +612,18 @@ def cmd_status(args):
             dim(upstream + ("@" + pinned if pinned else "")),
             dim(note)))
 
+    # No mods anywhere: claude may not be on PATH, so do not even ask it.
+    mods_in_play = bool(manifest_mods(m) or recorded_mods())
+    mstates = {}
+    if mods_in_play:
+        installed = installed_mods(timeout=STATUS_PLUGIN_TIMEOUT)
+        mstates = None if installed is None else mod_states(m, installed)
+        print()
+        if mstates is None:
+            print(bold("mods  ") + dim("not checked (claude plugin list failed)"))
+        else:
+            print_mod_rows(m, mstates, installed)
+
     print()
     platform, unmanaged = extra_dirs(skills)
     if platform:
@@ -583,8 +644,14 @@ def cmd_status(args):
     elif cmd == "foreign":
         reasons.append("CLAUDE.md differs from repo")
     reasons.extend(hreasons)
+    for state, reason in (("missing", "mods missing"), ("behind", "mods behind"),
+                          ("waiting", "mods waiting for approval")):
+        if state in (mstates or {}).values():
+            reasons.append(reason)
     if st["behind"]:
         reasons.append("repo %d behind" % st["behind"])
+    if autosync_failed:
+        reasons.append("autosync failed")
     if unmanaged:
         reasons.append("%d unmanaged" % len(unmanaged))
     stale = legacy_backups()
@@ -599,7 +666,7 @@ def cmd_status(args):
         else yellow("%d/%d %s; %s" % (ok, total, verb, ", ".join(reasons)))))
     if args.json:
         print(json.dumps({"repo": st, "skills": {n: s for n, s, _, _ in rows}, "unmanaged": unmanaged,
-                          "platform": platform, "hooks": hstates}, indent=2))
+                          "platform": platform, "hooks": hstates, "mods": mstates}, indent=2))
     return 0 if healthy else 1
 
 
@@ -720,7 +787,8 @@ def sync_claude_md(args):
     return 1
 
 
-HOOKS = {"UserPromptSubmit": "size-warn.py", "Stop": "context-warn.py"}
+HOOKS = {"UserPromptSubmit": "size-warn.py", "Stop": "context-warn.py",
+         "SessionStart": "session-sync.py"}
 HOOKS_SRC = os.path.join(REPO, "hooks")
 SETTINGS = os.path.expanduser("~/.claude/settings.json")
 
@@ -901,7 +969,7 @@ def in_linked_worktree(path):
 
 
 def sync_hooks(args):
-    """Register the warn hooks in ~/.claude/settings.json.
+    """Register our hooks (HOOKS) in ~/.claude/settings.json.
 
     A hook the owner deletes by hand stays deleted: state remembers what sync
     has installed, and a recorded script with no entry left is not re-added
@@ -954,12 +1022,711 @@ def sync_hooks(args):
     return 1 if changed else 0
 
 
+# --------------------------------------------------------------------- mods ---
+# A mod is a Claude Code plugin, named everywhere by its "name@marketplace" id.
+# skills.json records them as {"mods": {id: {"source": "owner/repo", "version": ...}}}.
+
+PLUGIN_TIMEOUT = 120  # seconds
+# `status` runs at every login shell (bin/setup-shell); a hung `claude` must
+# not hold the prompt. A list that times out reads as "not checked".
+STATUS_PLUGIN_TIMEOUT = 10
+
+
+def manifest_mods(m):
+    mods = m.get("mods", {})
+    if not isinstance(mods, dict):
+        return {}
+    return {k: v for k, v in mods.items() if isinstance(v, dict)}
+
+
+def _parse_json_output(text):
+    """The JSON in `claude plugin ... --json` stdout, or None.
+
+    Normally the whole of stdout; `marketplace add` prints progress first and
+    the JSON as the last line, so fall back to the last line that parses.
+    """
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if line.startswith(("{", "[")):
+            try:
+                return json.loads(line)
+            except ValueError:
+                continue
+    return None
+
+
+def plugin_cli(*args, timeout=PLUGIN_TIMEOUT):
+    """Run `claude plugin <args> --json`. Returns (returncode, data, stderr).
+
+    stdin is closed so a command approval prompt can never hang a sync.
+    """
+    try:
+        r = subprocess.run(["claude", "plugin", *args, "--json"], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        return 127, None, "claude not on PATH"
+    except subprocess.TimeoutExpired:
+        return 124, None, "timed out after %ds" % timeout
+    except (OSError, UnicodeDecodeError) as e:  # not runnable, or output not UTF-8
+        return 127, None, str(e)
+    return r.returncode, _parse_json_output(r.stdout or ""), (r.stderr or "").strip()
+
+
+def installed_mods(timeout=PLUGIN_TIMEOUT):
+    """{id: {"version": str | None, "enabled": bool}} from `plugin list`, or
+    None when the call fails or the output is not a list of {"id": str, ...}.
+
+    Only user-scope installs count (an entry with no scope is taken as one):
+    sync installs there, and a project or local install is present only from
+    its own directory, so it must read as neither here nor gone."""
+    rc, data, _ = plugin_cli("list", timeout=timeout)
+    if rc != 0 or not isinstance(data, list):
+        return None
+    out = {}
+    for item in data:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            return None
+        if item.get("scope", "user") != "user":
+            continue
+        version = item.get("version")
+        out[item["id"]] = {"version": version if isinstance(version, str) else None,
+                           "enabled": item.get("enabled") is True}
+    return out
+
+
+def marketplace_name(mod_id):
+    return mod_id.partition("@")[2]
+
+
+def recorded_mods():
+    """The mods state says sync installed, as a set. A malformed record reads
+    as none, as for recorded_hooks."""
+    recorded = load_state().get("mods_installed", [])
+    if not isinstance(recorded, list):
+        return set()
+    return {s for s in recorded if isinstance(s, str)}
+
+
+def removed_here(mod_id):
+    """True for a mod sync installed on this Mac (it is recorded) that is no
+    longer installed: the owner uninstalled it, and the next sync removes it
+    everywhere. Never in cloud, where a fresh container has nothing and sync
+    reinstalls instead. The caller has checked it is not installed."""
+    return not IS_CLOUD and mod_id in recorded_mods()
+
+
+def waiting_mods():
+    """{id: sha256 of the command} for mods whose install or update stopped to
+    ask the owner to approve a command. A malformed record reads as none."""
+    waiting = load_state().get("mods_waiting", {})
+    if not isinstance(waiting, dict):
+        return {}
+    return {k: v for k, v in waiting.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+def update_tried_mods():
+    """{id: recorded version} for mods sync ran `plugin update` on at that
+    recorded version and found elsewhere afterwards. Not tried again until
+    skills.json records another version. A malformed record reads as none."""
+    tried = load_state().get("mods_update_tried", {})
+    if not isinstance(tried, dict):
+        return {}
+    return {k: v for k, v in tried.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+def mod_states(m, installed=None):
+    """How this device stands on each mod, from `plugin list` and local state
+    only (no network), or None when `plugin list` cannot be read. `installed`
+    is installed_mods() as the caller already read it; read here when None.
+
+    {id: state}, state one of:
+      installed  listed, here, at the version skills.json records
+      behind     listed, here and enabled, at a different version from the one
+                 recorded
+      differs    behind, but sync already ran `plugin update` at this recorded
+                 version and it did not get there (update_tried_mods): not a
+                 fault, and not retried until the recorded version changes
+      disabled   listed, here, turned off (the owner's call): wins over behind,
+                 because nothing automatic touches a disabled mod
+      missing    listed and not here
+      removed    listed, not here, and recorded as installed by sync on this
+                 Mac: uninstalled here, so the next sync removes it everywhere
+                 (see removed_here); not a fault
+      waiting    listed, and its install or update stopped for an approval;
+                 wins over missing and behind, which it explains
+      unlisted   here, not listed, and recorded as installed by sync: dropped
+                 from skills.json elsewhere, so the next sync uninstalls it
+      extra      here, not listed and not recorded: installed by hand
+    """
+    if installed is None:
+        installed = installed_mods()
+    if installed is None:
+        return None
+    listed = manifest_mods(m)
+    waiting = waiting_mods()
+    tried = update_tried_mods()
+    recorded = recorded_mods()
+    states = {}
+    for mod_id in sorted(set(listed) | set(installed)):
+        if mod_id not in listed:
+            states[mod_id] = "unlisted" if mod_id in recorded else "extra"
+            continue
+        want = listed[mod_id].get("version")
+        here = installed.get(mod_id)
+        if here is None:
+            # As sync decides it: a removal here wins over a pending approval.
+            states[mod_id] = ("removed" if removed_here(mod_id)
+                              else "waiting" if mod_id in waiting else "missing")
+        elif not here["enabled"]:
+            states[mod_id] = "disabled"  # sync leaves it alone, so not a fault
+        elif isinstance(want, str) and here["version"] != want:
+            states[mod_id] = ("waiting" if mod_id in waiting
+                              else "differs" if tried.get(mod_id) == want else "behind")
+        else:
+            states[mod_id] = "installed"
+    return states
+
+
+def approval_sha(data):
+    """The sha256 of the command a `plugin install/update` result asks the owner
+    to approve, or None. Keyed only on shownCommand.sha256 (the shape is from
+    help, not captured), never on an outcome string."""
+    if not isinstance(data, dict):
+        return None
+    shown = data.get("shownCommand")
+    if isinstance(shown, dict) and isinstance(shown.get("sha256"), str):
+        return shown["sha256"]
+    return None
+
+
+def machine_name():
+    try:
+        r = subprocess.run(["scutil", "--get", "ComputerName"], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return socket.gethostname()
+
+
+GIT_TIMEOUT = 60  # seconds, for commit_and_push
+
+
+def commit_and_push(paths, message):
+    """git add <paths>, commit only those paths, push. False, saying why, on any
+    failure; a commit already made stays. Never in cloud."""
+    if IS_CLOUD:
+        print(red("  push      ") + "refused in cloud — commits only come from a Mac")
+        return False
+    # This runs unattended at session start: never wait on a credential prompt.
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    for step, argv in (("add", ["add", "--"] + paths),
+                       ("commit", ["commit", "-q", "-m", message, "--"] + paths),
+                       ("push", ["push", "-q"])):
+        try:
+            r = subprocess.run(["git", "-C", REPO] + argv, stdin=subprocess.DEVNULL, env=env,
+                               capture_output=True, text=True, timeout=GIT_TIMEOUT)
+            ok, why = r.returncode == 0, (r.stderr or r.stdout or "").strip()
+        except subprocess.TimeoutExpired:
+            ok, why = False, "timed out after %ds" % GIT_TIMEOUT
+        except OSError as e:
+            ok, why = False, str(e)
+        if not ok:
+            # git's first line names the cause; the hints after it do not.
+            lines = [ln.strip() for ln in why.splitlines()
+                     if ln.strip() and not ln.startswith("hint:")]
+            kept = " — the commit is kept; push it by hand" if step == "push" else ""
+            print(red("  %-9s " % step) + "%s failed: %s%s"
+                  % (step, lines[0] if lines else "no output", kept))
+            return False
+    return True
+
+
+def _mod_line(label, colour, text):
+    print(colour("  %-9s " % label) + text)
+
+
+def _mod_result(mod_id, verb, rc, data, err, waiting):
+    """Read an install/update result. True on success; an approval request is
+    recorded in `waiting`, never accepted."""
+    sha = approval_sha(data)
+    if sha is not None:
+        waiting[mod_id] = sha
+        _mod_line("waiting", yellow, "%s — needs your approval: skillctl approve %s"
+                  % (mod_id, mod_id))
+        return False
+    if rc != 0:
+        _mod_line("error", red, "%s — %s failed (exit %d): %s"
+                  % (mod_id, verb, rc, err or "no detail"))
+        return False
+    waiting.pop(mod_id, None)
+    return True
+
+
+def _stdin_is_tty():
+    return sys.stdin is not None and sys.stdin.isatty()
+
+
+def _set_waiting(mod_id, sha):
+    """Record (sha) or clear (None) a mod's pending approval in device state."""
+    waiting = waiting_mods()
+    if sha is None:
+        if mod_id not in waiting:
+            return
+        del waiting[mod_id]
+    else:
+        waiting[mod_id] = sha
+    save_state(mods_waiting=waiting or None)
+
+
+def approve_mod(mod_id, op, ask=input, accept=None):
+    """Run `claude plugin <op> <mod_id>` (op: install or update). If it stops
+    for a command approval, show the command, then re-run with
+    --accept-command only for that exact command: when `accept` is its
+    sha256, or when the owner answers y at a terminal. With no terminal and
+    no matching `accept`, print how to approve it and leave it waiting.
+    Never passes -y. True when the op succeeded; a declined or pending
+    approval is recorded in mods_waiting."""
+    rc, data, err = plugin_cli(op, mod_id)
+    sha = approval_sha(data)
+    if sha is not None:
+        shown = data["shownCommand"]
+        command = shown.get("command")
+        print(bold("%s wants to run a command:" % mod_id))
+        print("    " + (command if isinstance(command, str)
+                        else json.dumps(shown, sort_keys=True)))
+        if accept is not None and accept != sha:
+            _mod_line("refused", red, "%s — the command has changed since %s… was approved "
+                      "(it is now %s); review it and approve again" % (mod_id, accept[:12], sha))
+            _set_waiting(mod_id, sha)
+            return False
+        if accept is None:
+            if not _stdin_is_tty():
+                print(dim("    sha256 %s" % sha))
+                _mod_line("waiting", yellow, "%s — approve with: skillctl approve %s --accept %s"
+                          % (mod_id, mod_id, sha))
+                _set_waiting(mod_id, sha)
+                return False
+            try:
+                answer = ask("Run this command? [y/N] ")
+            except EOFError:
+                answer = ""
+            if answer.strip().lower() not in ("y", "yes"):
+                _mod_line("waiting", yellow, "%s — not approved; left as it is" % mod_id)
+                _set_waiting(mod_id, sha)
+                return False
+        rc, data, err = plugin_cli(op, mod_id, "--accept-command", sha)
+        again = approval_sha(data)
+        if again is not None:
+            _mod_line("waiting", yellow, "%s — asked for a different command (%s); "
+                      "nothing run — approve again" % (mod_id, again))
+            _set_waiting(mod_id, again)
+            return False
+    if rc != 0:
+        _mod_line("error", red, "%s — %s failed (exit %d): %s"
+                  % (mod_id, op, rc, err or "no detail"))
+        return False
+    _set_waiting(mod_id, None)
+    return True
+
+
+def cmd_approve(args):
+    """Approve the command a listed mod is waiting on, and install or update it."""
+    listed = manifest_mods(load_manifest())
+    waiting = waiting_mods()
+    if any(k not in listed for k in waiting):
+        save_state(mods_waiting={k: v for k, v in waiting.items() if k in listed} or None)
+    if args.id not in listed:
+        die("%s is not a mod in skills.json" % args.id)
+    installed = installed_mods()
+    if installed is None:
+        die("`claude plugin list` failed — cannot tell whether %s is installed" % args.id)
+    op = "update" if args.id in installed else "install"
+    if not approve_mod(args.id, op, accept=args.accept):
+        return 1
+    if op == "install":  # as sync records its own installs
+        save_state(mods_installed=sorted(recorded_mods() | {args.id}))
+    _mod_line("installed" if op == "install" else "updated", green, args.id)
+    return 0
+
+
+def _removal_hold(rs):
+    """Why a removed-here mod must not be propagated yet, or None."""
+    if rs["dirty"]:
+        return "commit your changes and re-run sync"
+    # A commit anywhere but main never reaches the other Macs, and switching
+    # back to main would then reinstall the mod.
+    if rs["branch"] != "main":
+        return "on branch %s, not main; switch to main and re-run sync" % rs["branch"]
+    if rs["behind"] is None or rs["ahead"] is None:
+        return "no upstream to push to; set one for main and re-run sync"
+    if rs["behind"] and rs["ahead"]:
+        return "repo has diverged from its upstream; reconcile and re-run sync"
+    if rs["behind"]:
+        return "repo is behind its upstream; pull and re-run sync"
+    if rs["ahead"]:
+        # Our push would publish the owner's unpushed commits along with it.
+        return "repo has unpushed local commits; push them and re-run sync"
+    return None
+
+
+def sync_mods(args, m):
+    """Make this device's mods match skills.json. Returns the number of changes.
+
+    Fails closed: if `claude plugin list` cannot be read, nothing at all is done.
+    A listed mod this device installed once and no longer has was uninstalled
+    here by the owner; on a Mac that removal is propagated (dropped from
+    skills.json, committed, pushed). In cloud a fresh container has nothing, so
+    there it is reinstalled instead. Never passes -y or --accept-command.
+    """
+    listed = manifest_mods(m)
+    recorded = recorded_mods()
+    if not listed and not recorded:
+        return 0  # no mods anywhere: claude may not even be on PATH
+    installed = installed_mods()
+    if installed is None:
+        _mod_line("mods", red, "`claude plugin list` failed — mods not synced")
+        return 0
+    waiting_before = waiting_mods()
+    waiting = dict(waiting_before)
+    tried_before = update_tried_mods()
+    tried = {k: v for k, v in tried_before.items() if k in listed}
+    record = set(recorded)
+    changes = 0
+    marketplaces = None  # names, read once when first needed
+    refreshed = {}  # marketplace -> whether `marketplace update` succeeded
+    updating = []   # ids `plugin update` ran on, read back below
+    removed_here = []
+
+    def ensure_marketplace(mod_id, spec):
+        nonlocal marketplaces
+        name = marketplace_name(mod_id)
+        if not name:
+            _mod_line("error", red, "%s — not a name@marketplace id" % mod_id)
+            return False
+        if marketplaces is None:
+            rc, data, err = plugin_cli("marketplace", "list")
+            if rc != 0 or not isinstance(data, list):
+                _mod_line("error", red, "%s — `claude plugin marketplace list` failed: %s"
+                          % (mod_id, err or "unreadable output"))
+                return False
+            marketplaces = {d.get("name") for d in data if isinstance(d, dict)}
+        if name in marketplaces:
+            return True
+        source = spec.get("source")
+        if not isinstance(source, str) or not source:
+            _mod_line("error", red, "%s — marketplace %s missing and no source to add it from"
+                      % (mod_id, name))
+            return False
+        _mod_line("market", green, "%s <- %s" % (name, source))
+        if not args.dry_run:
+            rc, _, err = plugin_cli("marketplace", "add", source)
+            if rc != 0:
+                _mod_line("error", red, "%s — adding marketplace %s failed: %s"
+                          % (mod_id, source, err or "exit %d" % rc))
+                return False
+        marketplaces.add(name)
+        return True
+
+    for mod_id in sorted(listed):
+        spec = listed[mod_id]
+        want = spec.get("version") if isinstance(spec.get("version"), str) else None
+        if mod_id in installed:
+            # A disabled mod is still installed; enabling it is the owner's call,
+            # and `plugin update` could re-enable it, so leave it entirely alone.
+            record.add(mod_id)
+            if not installed[mod_id]["enabled"]:
+                continue
+            have = installed[mod_id]["version"]
+            if not want or have == want:
+                waiting.pop(mod_id, None)
+                tried.pop(mod_id, None)
+                continue
+            if mod_id in waiting:
+                _mod_line("waiting", yellow, "%s — needs your approval: skillctl approve %s"
+                          % (mod_id, mod_id))
+                continue
+            if tried.get(mod_id) == want:
+                # Tried at this recorded version and it did not get there (a
+                # downgrade, or ahead by Claude Code's own update): retrying at
+                # every session start would only fail again.
+                _mod_line("differs", yellow, "%s — here %s, recorded %s; `plugin update` "
+                          "could not reach it (skillctl update records the latest)"
+                          % (mod_id, have or "?", want))
+                continue
+            _mod_line("update", green, "%s  %s -> %s" % (mod_id, have or "?", want))
+            if args.dry_run:
+                changes += 1
+                continue
+            market = marketplace_name(mod_id)
+            if not market:
+                _mod_line("error", red, "%s — not a name@marketplace id" % mod_id)
+                continue
+            if market not in refreshed:
+                # A stale local marketplace cache cannot offer the recorded version.
+                rc, _, err = plugin_cli("marketplace", "update", market)
+                refreshed[market] = rc == 0
+                if rc != 0:
+                    _mod_line("error", red, "marketplace %s — update failed (exit %d): %s"
+                              % (market, rc, err or "no detail"))
+            if not refreshed[market]:
+                continue
+            rc, data, err = plugin_cli("update", mod_id)
+            _mod_result(mod_id, "update", rc, data, err, waiting)
+            if mod_id not in waiting:  # it ran: whether it got there is read back below
+                updating.append(mod_id)
+            continue
+        if mod_id in recorded and not IS_CLOUD:
+            removed_here.append(mod_id)
+            continue
+        if mod_id in waiting:
+            _mod_line("waiting", yellow, "%s — needs your approval: skillctl approve %s"
+                      % (mod_id, mod_id))
+            continue
+        if not ensure_marketplace(mod_id, spec):
+            continue
+        _mod_line("install", green, mod_id)
+        if args.dry_run:
+            changes += 1
+            continue
+        rc, data, err = plugin_cli("install", mod_id)
+        if _mod_result(mod_id, "install", rc, data, err, waiting):
+            record.add(mod_id)
+            changes += 1
+
+    if updating:
+        # Exit 0 is not proof: `plugin update` cannot downgrade, and does
+        # nothing for a version its marketplace does not offer.
+        after = installed_mods()
+        for mod_id in updating:
+            want = listed[mod_id]["version"]
+            now = ((after or {}).get(mod_id) or {}).get("version")
+            if after is None:
+                _mod_line("error", red, "%s — `claude plugin list` failed after the update; "
+                          "it is checked again next sync" % mod_id)
+            elif now == want:
+                tried.pop(mod_id, None)
+                changes += 1
+            else:
+                tried[mod_id] = want
+                _mod_line("differs", yellow, "%s — `plugin update` left it at %s, not %s; "
+                          "not retried until skills.json records another version "
+                          "(skillctl update records the latest)" % (mod_id, now or "?", want))
+
+    for mod_id in sorted(recorded - set(listed)):
+        waiting.pop(mod_id, None)
+        if mod_id not in installed:
+            record.discard(mod_id)  # gone here and from the list: nothing left to do
+            continue
+        _mod_line("uninstall", yellow, mod_id)
+        changes += 1
+        if args.dry_run:
+            continue
+        rc, _, err = plugin_cli("uninstall", mod_id)
+        if rc == 0:
+            record.discard(mod_id)
+        else:
+            _mod_line("error", red, "%s — uninstall failed (exit %d): %s"
+                      % (mod_id, rc, err or "no detail"))
+
+    if removed_here:
+        changes += propagate_removals(args, m, removed_here, record)
+
+    if not args.dry_run:
+        if record != recorded:
+            save_state(mods_installed=sorted(record))
+        if waiting != waiting_before:
+            save_state(mods_waiting=waiting or None)
+        if tried != tried_before:
+            save_state(mods_update_tried=tried or None)
+    return changes
+
+
+# The pause before `plugin list` is read again to confirm a removal: one read
+# that came back empty while Claude Code was starting up must not remove a mod
+# from every Mac.
+REMOVAL_RECHECK_SECONDS = 2
+
+
+def propagate_removals(args, m, ids, record):
+    """Drop mods the owner uninstalled here from skills.json, commit and push.
+    Held unless the repo is clean, on main and level with its upstream. Returns
+    changes made: none if the commit could not be made, since the edit is then
+    undone."""
+    if len(ids) > 1:
+        # One `plugin list` that came back empty but successful would otherwise
+        # remove every mod from every Mac. Deliberate removals have `remove`.
+        _mod_line("held", yellow, "%s — several mods vanished at once — if you meant it, "
+                  "run skillctl remove <id> for each" % ", ".join(ids))
+        return 0
+    if args.dry_run:
+        for mod_id in ids:
+            _mod_line("remove", yellow, "%s — uninstalled here; would drop it from "
+                      "skills.json, commit and push" % mod_id)
+        return len(ids)
+    hold = _removal_hold(repo_state(strict=True))
+    if hold:
+        for mod_id in ids:
+            _mod_line("held", yellow, "%s — uninstalled here; %s" % (mod_id, hold))
+        return 0
+    # The several-at-once guard above never fires with one mod listed, and an
+    # empty list is no reason to hold (the owner may uninstall their only mod).
+    time.sleep(REMOVAL_RECHECK_SECONDS)
+    again = installed_mods()
+    if again is None or any(mod_id in again for mod_id in ids):
+        for mod_id in ids:
+            _mod_line("held", yellow, "%s — `claude plugin list` disagreed with itself "
+                      "about it; not removed — re-run sync" % mod_id)
+        return 0
+    for mod_id in ids:
+        _mod_line("remove", yellow, "%s — uninstalled here; dropping it from skills.json"
+                  % mod_id)
+        del m["mods"][mod_id]
+    save_manifest(m)
+    message = "Remove mod %s (uninstalled on %s)" % (ids[0], machine_name())
+    if not commit_and_push(["skills.json"], message) and git("status", "--porcelain",
+                                                             "--", "skills.json"):
+        # add or commit failed, so the edit is ours alone (the tree was clean):
+        # undo it in index and worktree. The mods stay recorded, so the
+        # removal is tried again next sync.
+        git("checkout", "HEAD", "--", "skills.json")
+        if git("status", "--porcelain", "--", "skills.json"):
+            _mod_line("error", red, "could not restore skills.json — "
+                      "`git checkout HEAD -- skills.json` by hand")
+        else:
+            _mod_line("restored", yellow, "restored skills.json from HEAD — the removal "
+                      "was not committed; it is retried next sync")
+        return 0
+    record.difference_update(ids)
+    return len(ids)
+
+
+def prune_removed_links(managed, dry_run=False):
+    """Unlink every symlink in INSTALL_DIR that points into SKILLS_SRC under a
+    name the manifest no longer lists: a skill removed on another device. The
+    target is read, not followed, so a link whose skill directory is already
+    gone counts. Real directories and links to anywhere else are never touched.
+    Returns the names; with dry_run, only reports them."""
+    if not os.path.isdir(INSTALL_DIR):
+        return []
+    src = os.path.realpath(SKILLS_SRC)
+    pruned = []
+    for name in sorted(os.listdir(INSTALL_DIR)):
+        if name in managed:
+            continue
+        path = os.path.join(INSTALL_DIR, name)
+        if not os.path.islink(path):
+            continue
+        target = os.path.normpath(os.path.join(INSTALL_DIR, os.readlink(path)))
+        if os.path.realpath(os.path.dirname(target)) != src:
+            continue
+        print(yellow("  unlink  ") + "%s (removed from the manifest)" % name)
+        if not dry_run:
+            os.unlink(path)
+        pruned.append(name)
+    return pruned
+
+
+def _restore_paths(paths):
+    """Undo an uncommitted removal in index and worktree. The tree was clean
+    when it began (_removal_hold), so what differs in `paths` is ours alone."""
+    git("checkout", "HEAD", "--", *paths)
+    joined = " ".join(paths)
+    if git("status", "--porcelain", "--", *paths):
+        print(red("  error     ") + "could not restore %s — `git checkout HEAD -- %s` by hand"
+              % (joined, joined))
+    else:
+        print(yellow("  restored  ") + "%s from HEAD — nothing was removed" % joined)
+
+
+def cmd_remove(args):
+    """Remove a skill or mod everywhere: delete its manifest entry (and, for a
+    skill, its directory), commit and push. Other devices drop it at their next
+    sync."""
+    m = load_manifest()
+    name = args.name
+    if name in m.get("skills", {}):
+        kind = "skill"
+    elif name in manifest_mods(m):
+        kind = "mod"
+    else:
+        die("%s is not a skill or a mod in skills.json" % name)
+    if IS_CLOUD:
+        die("remove commits and pushes, which cloud sessions never do; run it on a Mac")
+    # The hold is only as good as the last fetch: behind a remote that moved
+    # since, the push would fail after the mod was already uninstalled here.
+    fetched, why = fetch_upstream()
+    if not fetched:
+        die("not removing %s: git fetch failed: %s" % (name, why))
+    # The same hold as for a removal sync propagates: ahead included, since the
+    # push would publish the owner's other unpushed commits along with this one.
+    hold = _removal_hold(repo_state(strict=True))
+    if hold:
+        die("not removing %s: %s" % (name, hold))
+
+    src = os.path.join(SKILLS_SRC, name)
+    link = os.path.join(INSTALL_DIR, name)
+    paths = ["skills.json"]
+    if kind == "skill" and os.path.lexists(src):
+        paths.append("skills/" + name)
+    if args.dry_run:
+        what = ("drop it from skills.json, delete skills/%s, unlink %s" % (name, link)
+                if kind == "skill" else "uninstall it here, drop it from skills.json")
+        print(yellow("  remove  ") + "%s %s: %s, commit and push" % (kind, name, what))
+        return 0
+
+    if kind == "mod":
+        # Before skills.json is touched, so a failure leaves everything as it was.
+        rc, data, err = plugin_cli("uninstall", name)
+        not_installed = isinstance(data, dict) and data.get("failureCode") == "not_installed"
+        if rc != 0 and not not_installed:
+            die("`claude plugin uninstall %s` failed (exit %d): %s — skills.json left alone"
+                % (name, rc, err or "no detail"))
+        del m["mods"][name]
+    else:
+        del m["skills"][name]
+    save_manifest(m)
+    if kind == "skill":
+        _remove(src)
+
+    pushed = commit_and_push(paths, "Remove %s %s" % (kind, name))
+    if not pushed and git("status", "--porcelain", "--", *paths):
+        # add or commit failed: put the repo back as it was.
+        _restore_paths(paths)
+        print(dim("          run skillctl remove %s again once that is fixed" % name))
+        return 1
+    # Past here the commit is made; a failed push was reported and is the
+    # owner's to finish, but the removal stands, so finish it here too.
+    if kind == "skill":
+        if os.path.islink(link):
+            os.unlink(link)
+        elif os.path.exists(link):
+            print(dim("          %s is a real directory, not a link; left in place" % link))
+    else:
+        recorded = recorded_mods()
+        if name in recorded:
+            save_state(mods_installed=sorted(recorded - {name}))
+        waiting = waiting_mods()
+        if name in waiting:
+            del waiting[name]
+            save_state(mods_waiting=waiting or None)
+    print(green("removed ") + "%s %s" % (kind, name))
+    return 0 if pushed else 1
+
+
 def cmd_sync(args):
     m = load_manifest()
     os.makedirs(INSTALL_DIR, exist_ok=True)
     changed = 0
     modes = set()
     copy_device = load_state().get("install_mode") == "copy"
+    if not copy_device:  # there the install dirs are real copies, not ours to unlink
+        changed += len(prune_removed_links(set(m["skills"]), args.dry_run))
     for name in sorted(m["skills"]):
         src = os.path.join(SKILLS_SRC, name)
         dst = os.path.join(INSTALL_DIR, name)
@@ -1010,6 +1777,7 @@ def cmd_sync(args):
 
     changed += sync_claude_md(args)
     changed += sync_hooks(args)
+    changed += sync_mods(args, m)
 
     platform, unmanaged = extra_dirs(m["skills"])
     for name in platform:
@@ -1063,6 +1831,78 @@ def _check_one(name, spec):
     }
 
 
+def _check_mods(m):
+    """Compare each listed mod's marketplace-latest with the version skills.json
+    records, printing a line per mod. Returns (updates, errors).
+
+    The latest version comes from `plugin install <id>` on a mod already
+    installed here: that exits 0 and reports installedVersion and
+    availableVersion without changing anything (`plugin list --available`
+    carries no version for claude-community). A mod not installed here has
+    nothing to compare and is neither an update nor an error.
+    """
+    listed = manifest_mods(m)
+    if not listed:
+        return 0, 0  # no mods anywhere: claude may not even be on PATH
+    updates = errors = 0
+
+    def line(label, colour, mod_id, text):
+        print("  %-9s %-32s %s" % (colour(label), mod_id, text))
+
+    refreshed = {}  # marketplace -> failure text, or None when it refreshed
+    for market in sorted({marketplace_name(i) for i in listed} - {""}):
+        rc, _, err = plugin_cli("marketplace", "update", market)
+        refreshed[market] = None if rc == 0 else "marketplace %s update failed (exit %d): %s" % (
+            market, rc, err or "no detail")
+    installed = installed_mods()
+    for mod_id in sorted(listed):
+        market = marketplace_name(mod_id)
+        if not market:
+            line("error", red, mod_id, "not a name@marketplace id")
+            errors += 1
+            continue
+        if installed is None:
+            line("error", red, mod_id, "`claude plugin list` failed")
+            errors += 1
+            continue
+        if mod_id not in installed:
+            line("skipped", yellow, mod_id, dim(
+                "uninstalled here — the next sync removes it everywhere "
+                "(reinstall it to keep it)" if removed_here(mod_id)
+                else "not installed here — run sync"))
+            continue
+        if not installed[mod_id]["enabled"]:
+            # `plugin install` on a disabled mod re-enables it.
+            line("skipped", yellow, mod_id, dim("disabled here — not checked"))
+            continue
+        if refreshed[market]:
+            line("error", red, mod_id, refreshed[market])
+            errors += 1
+            continue
+        rc, data, err = plugin_cli("install", mod_id)
+        available = data.get("availableVersion") if isinstance(data, dict) else None
+        if approval_sha(data) is not None:
+            line("error", red, mod_id, "asked for a command approval; nothing run")
+            errors += 1
+            continue
+        if rc != 0 or not isinstance(available, str):
+            line("error", red, mod_id, "no available version (exit %d): %s"
+                 % (rc, err or "unreadable output"))
+            errors += 1
+            continue
+        recorded = listed[mod_id].get("version")
+        if not isinstance(recorded, str):
+            recorded = data.get("installedVersion")
+        if not isinstance(recorded, str):
+            recorded = installed[mod_id]["version"]
+        if recorded == available:
+            line("current", green, mod_id, dim(available))
+        else:
+            line("UPDATE", red, mod_id, "%s -> %s" % (recorded or "?", available))
+            updates += 1
+    return updates, errors
+
+
 def cmd_check(args):
     m = load_manifest()
     names = [args.name] if args.name else sorted(m["skills"])
@@ -1102,26 +1942,35 @@ def cmd_check(args):
         rest = len(r["modified"]) + len(r["added_upstream"]) - args.files
         if rest > 0:
             print(dim("              … and %d more" % rest))
+    mod_stale = mod_errors = 0
+    if not args.name:  # a named check is one skill; mods are part of a full sweep
+        mod_stale, mod_errors = _check_mods(m)
     print()
     if stale:
         print(bold("%d skill(s) have upstream changes" % stale)
-              + dim("   review: skillctl diff <name>   adopt: skillctl vendor <name>"))
+              + dim("   review: skillctl diff <name>   adopt: skillctl update"))
     elif not errors:
         print(green("all vendored skills are current"))
-    if errors:
+    if mod_stale:
+        print(bold("%d mod(s) have updates" % mod_stale)
+              + dim("   adopt: skillctl update"))
+    if errors or mod_errors:
         # An errored lookup proves nothing either way, so this sweep must not
         # replace the last record: saving it would claim those skills current.
-        print(red("%d skill(s) could not be checked" % errors)
-              + dim("   previous check record kept"))
+        if errors:
+            print(red("%d skill(s) could not be checked" % errors))
+        if mod_errors:
+            print(red("%d mod(s) could not be checked" % mod_errors))
+        print(dim("previous check record kept"))
         return 1
     if not args.name:  # only a full sweep is a meaningful freshness record
-        save_state(last_check=now_iso(), last_check_stale_count=stale,
+        save_state(last_check=now_iso(), last_check_stale_count=stale + mod_stale,
                    last_check_pins=pin_fingerprint(m),
                    # Written and never read until it was removed; retired here
                    # so devices that ran the old version drop it too. Safe to
                    # delete this line once both Macs have checked once.
                    last_check_head=None)
-    return stale and 2 or 0
+    return (stale or mod_stale) and 2 or 0
 
 
 def cmd_diff(args):
@@ -1148,33 +1997,75 @@ def cmd_diff(args):
     return 0
 
 
+class UpstreamGone(Exception):
+    """Upstream has no files where the skill's origin points."""
+
+
+def vendor_one(name, spec, dry_run=False):
+    """Bring skills/<name> to the latest commit of its origin's ref and re-pin
+    `spec` in place. Returns {"old", "new", "changed", "files"}: the pinned
+    commit before and after, whether the vendored content changed, and how
+    many files were fetched.
+
+    The fetch lands in a temp directory first, so a failed download or an
+    upstream path that no longer exists (UpstreamGone) leaves the skill and
+    its pin as they were. dry_run only resolves the ref: nothing is written,
+    "changed" says whether the pin would move, and "files" is None.
+    """
+    origin = spec["origin"]
+    ref = origin.get("ref", "main")
+    old = (spec.get("pin") or {}).get("commit")
+    latest = resolve_ref(origin["repo"], ref)
+    if dry_run:
+        return {"old": old, "new": latest, "changed": old != latest, "files": None}
+    dest = os.path.join(SKILLS_SRC, name)
+    tmp = tempfile.mkdtemp(prefix="skillctl-vendor-")
+    try:
+        fetched = os.path.join(tmp, name)
+        n = fetch_subtree(origin, latest, fetched)
+        if not n:
+            raise UpstreamGone("nothing at %s:%s@%s" % (
+                origin["repo"], origin.get("path", "") or "/", latest[:7]))
+        before = tree_hash(dest)
+        if os.path.isdir(dest):
+            shutil.rmtree(dest)
+        shutil.move(fetched, dest)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    after = tree_hash(dest)
+    spec["pin"] = {"commit": latest, "ref": ref}
+    spec["hash"] = after
+    return {"old": old, "new": latest, "changed": before != after, "files": n}
+
+
 def cmd_vendor(args):
     m = load_manifest()
     names = sorted(m["skills"]) if args.all else [args.name]
     if not names or names == [None]:
         die("give a skill name or --all")
-    updated = 0
+    updated = skipped = 0
     for name in names:
         spec = m["skills"].get(name) or die("unknown skill: %s" % name)
         origin = spec.get("origin")
         if not origin:
             continue
-        latest = resolve_ref(origin["repo"], origin.get("ref", "main"))
-        dest = os.path.join(SKILLS_SRC, name)
-        before = tree_hash(dest)
-        if args.dry_run:
-            print(yellow("  would vendor ") + "%s <- %s@%s" % (name, origin["repo"], latest[:7]))
+        try:
+            r = vendor_one(name, spec, dry_run=args.dry_run)
+        except UpstreamGone as e:
+            # Carry on: the skills vendored before this one still need their
+            # new pins saved below, or their files and skills.json disagree.
+            print("  %-9s %-32s %s" % (red("skipped"), name, "%s — left as it is" % e))
+            skipped += 1
             continue
-        n = fetch_subtree(origin, latest, dest)
-        after = tree_hash(dest)
-        spec["pin"] = {"commit": latest, "ref": origin.get("ref", "main")}
-        spec["hash"] = after
-        if before == after:
-            print("  %-9s %-32s %s" % (dim("nochange"), name, dim("%d files" % n)))
+        if args.dry_run:
+            print(yellow("  would vendor ") + "%s <- %s@%s" % (name, origin["repo"], r["new"][:7]))
+            continue
+        if not r["changed"]:
+            print("  %-9s %-32s %s" % (dim("nochange"), name, dim("%d files" % r["files"])))
         else:
             updated += 1
             print("  %-9s %-32s %s" % (green("vendored"), name,
-                                       dim("%d files @ %s" % (n, latest[:7]))))
+                                       dim("%d files @ %s" % (r["files"], r["new"][:7]))))
     if not args.dry_run:
         save_manifest(m)
         print()
@@ -1186,7 +2077,225 @@ def cmd_vendor(args):
                 print(red("lint failed") + " — an upstream change broke a skill's frontmatter. "
                       "Fix before committing.")
                 return 1
-    return 0
+    return 1 if skipped else 0
+
+
+def _update_hold(rs):
+    """Why `update` must not run on this checkout, or None. Being behind is
+    fine: update pulls first."""
+    if rs["dirty"]:
+        return "uncommitted changes; commit or discard them first"
+    if rs["branch"] != "main":
+        return ("on branch %s, not main; an update committed here never reaches "
+                "the other Macs" % rs["branch"])
+    if rs["behind"] is None or rs["ahead"] is None:
+        return "main has no upstream to pull from or push to; set one first"
+    if rs["behind"] and rs["ahead"]:
+        return "main has diverged from its upstream; reconcile it first"
+    if rs["ahead"]:
+        # The update's push would publish them along with it.
+        return "main has %d unpushed commit(s); push them first" % rs["ahead"]
+    return None
+
+
+def _git_bounded(*args):
+    """git <args> in REPO, bounded by GIT_TIMEOUT and never waiting on a
+    credential prompt. Returns (ok, git's first line of complaint)."""
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    try:
+        r = subprocess.run(["git", "-C", REPO] + list(args),
+                           stdin=subprocess.DEVNULL, env=env,
+                           capture_output=True, text=True, timeout=GIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return False, "timed out after %ds" % GIT_TIMEOUT
+    except OSError as e:
+        return False, str(e)
+    if r.returncode == 0:
+        return True, ""
+    lines = [ln.strip() for ln in (r.stderr or r.stdout or "").splitlines()
+             if ln.strip() and not ln.startswith("hint:")]
+    return False, lines[0] if lines else "exit %d" % r.returncode
+
+
+def pull_ff_only():
+    """`git pull --ff-only`: (ok, git's first line of complaint)."""
+    return _git_bounded("pull", "--ff-only", "-q")
+
+
+def fetch_upstream():
+    """`git fetch`, so the remote-tracking refs are current: (ok, why)."""
+    return _git_bounded("fetch", "--quiet")
+
+
+SUITE_TIMEOUT = 600  # seconds; a hung suite is a failed one
+
+
+def run_suite():
+    """This repo's test suite as a subprocess, judged by its exit code alone.
+    Returns (ok, path): path is the file holding its output when it failed."""
+    fd, path = tempfile.mkstemp(prefix="skillctl-update-suite-", suffix=".txt")
+    with os.fdopen(fd, "w") as out:
+        try:
+            r = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"],
+                               cwd=REPO, stdin=subprocess.DEVNULL,
+                               stdout=out, stderr=subprocess.STDOUT, timeout=SUITE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            out.write("\nskillctl: the suite timed out after %ds\n" % SUITE_TIMEOUT)
+            return False, path
+    if r.returncode == 0:
+        os.unlink(path)
+        return True, None
+    return False, path
+
+
+def _update_mods(m, dry_run):
+    """Refresh each listed mod's marketplace and update it to the latest,
+    recording the installed version in `m`. Returns (moved, waiting, failed):
+    moved is [(id, old, new)]; a mod waiting on approval is left as it is."""
+    listed = manifest_mods(m)
+    moved, waiting, failed = [], [], []
+    if not listed:
+        return moved, waiting, failed
+    installed = installed_mods()
+    if installed is None:
+        _mod_line("error", red, "`claude plugin list` failed — mods not updated")
+        return moved, waiting, sorted(listed)
+    refreshed = {}  # marketplace -> whether `marketplace update` succeeded
+    updated = []
+    for mod_id in sorted(listed):
+        if mod_id not in installed:
+            if removed_here(mod_id):
+                _mod_line("skipped", yellow, "%s — uninstalled here; the next sync removes "
+                          "it everywhere (reinstall it to keep it)" % mod_id)
+            elif mod_id in waiting_mods():
+                waiting.append(mod_id)
+            else:
+                _mod_line("skipped", yellow, "%s — not installed here; skillctl sync "
+                          "installs it" % mod_id)
+            continue
+        if not installed[mod_id]["enabled"]:
+            # `plugin update` could re-enable it; that is the owner's call.
+            _mod_line("skipped", yellow, "%s — disabled here — skipped" % mod_id)
+            continue
+        market = marketplace_name(mod_id)
+        if dry_run:
+            _mod_line("would", yellow, "%s — refresh %s and take its latest (now %s)"
+                      % (mod_id, market or "?", installed[mod_id]["version"] or "?"))
+            continue
+        if not market:
+            _mod_line("error", red, "%s — not a name@marketplace id" % mod_id)
+            failed.append(mod_id)
+            continue
+        if market not in refreshed:
+            rc, _, err = plugin_cli("marketplace", "update", market)
+            refreshed[market] = rc == 0
+            if rc != 0:
+                _mod_line("error", red, "marketplace %s — update failed (exit %d): %s"
+                          % (market, rc, err or "no detail"))
+        if not refreshed[market]:
+            failed.append(mod_id)
+        elif approve_mod(mod_id, "update"):
+            updated.append(mod_id)
+        elif mod_id in waiting_mods():
+            waiting.append(mod_id)
+        else:
+            failed.append(mod_id)
+    if updated:
+        after = installed_mods()
+        for mod_id in updated:
+            new = ((after or {}).get(mod_id) or {}).get("version")
+            spec = m["mods"][mod_id]
+            old = spec.get("version") if isinstance(spec.get("version"), str) else None
+            if not new:
+                _mod_line("error", red, "%s — updated, but its version could not be read; "
+                          "skills.json keeps %s" % (mod_id, old or "no version"))
+                failed.append(mod_id)
+            elif new != old:
+                spec["version"] = new
+                moved.append((mod_id, old, new))
+    return moved, waiting, failed
+
+
+def cmd_update(args):
+    """Every vendored skill to its upstream's latest commit and every mod to
+    its marketplace's latest; lint and the test suite; then one commit,
+    pushed. Run when the owner checks in. A skill that cannot be fetched is
+    skipped and named, and a mod waiting on approval is left as it is; the
+    rest still go through."""
+    if IS_CLOUD:
+        die("update commits and pushes, which cloud sessions never do; run it on a Mac")
+    hold = _update_hold(repo_state(strict=True))
+    if hold and not args.dry_run:
+        die("not updating: %s" % hold)
+    if hold:
+        print(yellow("  note      ") + "a real run would refuse: %s" % hold)
+    elif not args.dry_run:
+        ok, why = pull_ff_only()
+        if not ok:
+            die("git pull --ff-only failed: %s" % why)
+
+    m = load_manifest()
+    moved_skills, skipped = [], []
+    for name in sorted(m["skills"]):
+        spec = m["skills"][name] or {}
+        if not spec.get("origin"):
+            continue
+        try:
+            r = vendor_one(name, spec, dry_run=args.dry_run)
+        except (Exception, SystemExit) as e:
+            # SystemExit: gh() dies on a rate limit, having said why on stderr.
+            why = ("see the error above" if isinstance(e, SystemExit)
+                   else str(e) if isinstance(e, UpstreamGone)
+                   else "%s: %s" % (type(e).__name__, e))
+            print(red("  skipped   ") + "%s — %s" % (name, why))
+            skipped.append(name)
+            continue
+        if r["changed"] or r["old"] != r["new"]:
+            moved_skills.append((name, r["old"], r["new"]))
+    if moved_skills and not args.dry_run:
+        save_manifest(m)  # before the mods, so a crash there leaves pins matching files
+
+    moved_mods, waiting, failed = _update_mods(m, args.dry_run)
+    if moved_mods:
+        save_manifest(m)
+
+    print()
+    for name, old, new in moved_skills:
+        print("  skill  %-28s %s -> %s" % (name, (old or "unpinned")[:7], new[:7]))
+    for mod_id, old, new in moved_mods:
+        print("  mod    %-28s %s -> %s" % (mod_id, old or "none", new))
+    for mod_id in waiting:
+        print(yellow("  waiting   ") + "%s — left at its version; approve with: "
+              "skillctl approve %s" % (mod_id, mod_id))
+    if skipped:
+        print(red("  skipped   ") + "%s — not updated; re-run update once fixed"
+              % ", ".join(skipped))
+    if failed:
+        print(red("  failed    ") + "%s — not updated" % ", ".join(failed))
+    status = 1 if skipped or failed else 0
+
+    if args.dry_run:
+        print(bold("dry run — nothing written, pulled or committed"))
+        return status
+    if not moved_skills and not moved_mods:
+        print(green("nothing to update"))
+        return status
+
+    print(dim("linting…"))
+    if cmd_lint(args) != 0:
+        print(red("lint failed") + " — changes left uncommitted in %s; nothing pushed" % REPO)
+        return 1
+    print(dim("running the test suite…"))
+    ok, path = run_suite()
+    if not ok:
+        print(red("test suite failed") + " — output in %s; changes left uncommitted, "
+              "nothing pushed" % path)
+        return 1
+    message = "Update: %d skill(s), %d mod(s)" % (len(moved_skills), len(moved_mods))
+    if not commit_and_push(["skills.json", "skills"], message):
+        return 1
+    print(green("committed and pushed: ") + message)
+    return status
 
 
 def cmd_adopt(args):
@@ -1623,8 +2732,11 @@ def run_one(prompt, workspace, permission_mode, timeout, settings=None):
             subprocess.run(["git", "-c", "user.email=eval@local", "-c", "user.name=eval",
                             "commit", "-qm", "initial"], cwd=cwd, capture_output=True)
         cmd = eval_command(prompt, permission_mode, settings)
+        # Each run starts a session; without this every rep would pull and sync.
+        env = {**os.environ, "SKILLCTL_NO_AUTOSYNC": "1"}
         try:
-            proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+            proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+                                  env=env)
         except FileNotFoundError:
             return [], [], "the `claude` CLI is not on PATH"
         except subprocess.TimeoutExpired:
@@ -1897,8 +3009,9 @@ every session. Skills installed that way are registered in the same session.
 `skills/` — %(count)d skills, `skills.json` — the manifest they are pinned by,
 `CLAUDE.md` — the routing table that makes them fire, `bin/skillctl` — the
 sync tool, `bin/cloud-*.sh` — the cloud bootstrap and hook,
-`hooks/` — two warn-only hooks (instruction-file size, context size) that
-`skillctl sync` registers.
+`hooks/` — three hooks that `skillctl sync` registers: two warn-only ones
+(instruction-file size, context size) and `session-sync.py`, which pulls and
+syncs at the start of every session on a Mac and does nothing in cloud.
 
 Most of the skills are vendored from public upstreams; `skills.json` records
 each one's origin repo and pinned commit. Credit belongs to their authors.
@@ -2035,6 +3148,24 @@ def main():
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--force", action="store_true", help="replace drifted real directories")
     s.set_defaults(fn=cmd_sync)
+
+    s = sub.add_parser("remove", help="remove a skill or mod everywhere (commits and pushes)")
+    s.add_argument("name", help="a skill name or a mod id (name@marketplace)")
+    s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(fn=cmd_remove)
+
+    s = sub.add_parser("update", help="every skill and mod to upstream latest; lint, test, "
+                                      "commit and push")
+    s.add_argument("--dry-run", action="store_true",
+                   help="say what would move; write, pull and commit nothing")
+    s.set_defaults(fn=cmd_update)
+
+    s = sub.add_parser("approve", help="approve the command a mod is waiting on, then "
+                                       "install or update it")
+    s.add_argument("id", help="the mod's name@marketplace id")
+    s.add_argument("--accept", metavar="SHA256",
+                   help="approve without a prompt: the sha256 of the command shown")
+    s.set_defaults(fn=cmd_approve)
 
     s = sub.add_parser("check", help="which vendored skills have upstream updates")
     s.add_argument("name", nargs="?")
