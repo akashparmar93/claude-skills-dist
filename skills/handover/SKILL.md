@@ -42,16 +42,25 @@ Otherwise park it, in this order:
 Never park work by leaving it on a branch — step 4 deletes the branch.
 Never land a *failing* test on `main`.
 
-## 2. Verify before writing anything down
+## 2. Read once, start the checks, write while they run
 
 **REQUIRED SUB-SKILL:** verification-before-completion.
 
-Write the **Start here** block (§3) first, all of it, and run it verbatim.
-Its test run is the Verified test run: the suite runs once, there. Then run
-what the block does not — lint, build, server checks — and read the output. The entry records what
-you *ran* and what it *said* — never "tests pass" from memory. If something is
-broken, the entry says so. A handover that hides a failure costs the next
-session more than the failure does.
+1. **Read everything in one command:** the machine name, the date and time,
+   `git status --short`, `git stash list`, `git branch -a`, `git log
+   --oneline` since the previous handover, the previous entry alone (`sed -n
+   '/^## <its heading>/,/^## /p' <log>`), and `gh run list --limit 3`. Read
+   further only where that output points.
+2. **Start the Start here block (§3) in the background**, all of it,
+   verbatim, its output to a file: the harness's background run, or `bash
+   start-here.sh > start-here.out 2>&1 &`. Its test run is the Verified test
+   run: the suite runs once, there.
+3. **Write the entry while it runs**, every slot but Status and Verified.
+4. **When it has finished, read its output**, run what the block does not
+   — lint, build, server checks — and write Status and Verified from what
+   they *said*, never "tests pass" from memory. If something is broken, the
+   entry says so. A handover that hides a failure costs the next session
+   more than the failure does.
 
 **CI is recorded, not waited on.** Read `gh run list` once. A run that is
 queued or in progress is recorded as pending, with its run id and commit, in
@@ -62,8 +71,9 @@ starts in §4.
 ## 3. Write the entry
 
 Find the file the project already uses — `OPEN.md`, `PROGRESS.md`, a log under
-`docs/` — and match its shape and ordering. Read the previous entry first. Only
-propose a new file when there is genuinely none, and ask before creating it.
+`docs/` — and match its ordering and headings; the slots below set each
+entry's shape. §2's read gave you the previous entry. Only propose a new
+file when there is genuinely none, and ask before creating it.
 
 **If the file you would write into is loaded automatically** — `CLAUDE.md`,
 `CLAUDE.local.md`, `.claude/CLAUDE.md`, `AGENTS.md` — every byte of it is
@@ -78,9 +88,10 @@ short view of **only the latest entry**:
    own order (a new log keeps the order they had).
 3. Write the short view into the block: every slot as in the full entry,
    except these:
-   - **Verified** is one line: the machine, the time, the headline results
-     (`make test` -> `Ran 31 tests ... OK`, lint clean), and a pointer to
-     the log entry, which keeps every command and its result.
+   - **Verified** is shorter than the log's: the machine, the time, the
+     test run's result (`make test` -> `Ran 31 tests ... OK`), what is
+     broken or not verified, and a pointer to the log entry, which keeps
+     every other command's result.
    - **Landed, and why** is one line per change or decision, naming where
      its reasons are written — the log entry, a commit, a spec or plan
      section.
@@ -90,8 +101,6 @@ short view of **only the latest entry**:
      without asking. The slot is one line naming that file, then the two or
      three commands that matter most (machine name, get current, confirm
      green).
-   - **Stops here**: an item carried from an earlier entry is one line,
-     naming where its full text is written — the log entry that has it.
 
 Do it in the same commit, and say in your closing message how many entries
 moved and the file's size before and after.
@@ -104,16 +113,26 @@ one or the other. An instruction only to record the handover there, such as
 "record the handover under 'Current status'", is not a conflict: replacing
 the block still records it there.
 
-**Every entry fills these slots. A slot with nothing in it says so.**
+**Every entry fills these slots. A slot with nothing in it says so. A slot
+that has not changed since an earlier entry is one line naming the entry
+that holds it in full** — `Start here — unchanged since 2026-10-13 19:45` —
+the entry with the text, never one that itself points back. Stops here
+keeps its items: a carried one is one line naming the entry with its full
+text.
 
 - **Status** — one sentence. What is done and landed; what is not.
-- **Verified** — the exact commands run and their exact results, dated, and
-  the machine they ran on by name (`scutil --get ComputerName`, or `hostname`).
+- **Verified** — one line, however many commands ran, even where earlier
+  entries list them: the machine by name (`scutil --get ComputerName`, or
+  `hostname`), the date and time, each command and its headline result, and
+  what could not be verified:
+
+  ```
+  - **Verified** — Akash’s MacBook Air, 2026-10-15 23:21: `make test` -> `Ran 31 tests ... OK`; `df -h /` (15:02) -> 61% used. Not verified: a restore.
+  ```
 - **Start here** — the block a cold session pastes first: its first command
   prints the machine name, then get current, get running, confirm green, and
-  `gh run list --commit <sha>` for any CI run left pending. Run it yourself
-  before you write it down; "expected output" means output you have actually
-  seen.
+  `gh run list --commit <sha>` for any CI run left pending. It is the block
+  §2 ran; "expected output" means output you have actually seen.
 - **Landed, and why** — what changed, plus the decisions made this session and
   their reasons. These exist nowhere else.
 - **Stops here** — what a cold reader would wrongly assume is finished. Green
@@ -160,6 +179,9 @@ and anything left for them.
 | "It's one more line, I'll just finish it" | Is the test already written? Green without a design decision? If not — park it. |
 | Write "all tests pass" | Run them. Record what they said. |
 | Run the suite again before committing | The Start here run is the Verified run. Once. |
+| Wait for the Start here run before writing | It runs in the background; write the entry meanwhile. |
+| Read the log, `git log` and `git status` one by one | One command, §2 step 1. |
+| Rewrite a slot nothing changed | One line naming the entry that has it. |
 | `gh run watch` until CI finishes | Record the run id as pending; Start here checks it. |
 | Leave an untracked scratch file "for them to delete" | Commit it, delete it, or ignore it. A cold session opens a clean tree. |
 | Push the branch and stop | Merge to `main`. A branch is not a handover. |
