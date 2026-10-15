@@ -56,11 +56,13 @@ Never land a *failing* test on `main`.
    start-here.sh > start-here.out 2>&1 &`. Its test run is the Verified test
    run: the suite runs once, there.
 3. **Write the entry while it runs**, every slot but Status and Verified.
-4. **When it has finished, read its output**, run what the block does not
-   — lint, build, server checks — and write Status and Verified from what
-   they *said*, never "tests pass" from memory. If something is broken, the
-   entry says so. A handover that hides a failure costs the next session
-   more than the failure does.
+4. **When it has finished, read its output whole** — `cat` it, or page it
+   by its `===` markers; never through a filter such as `grep -v`: one
+   written to drop the progress dots drops result lines too. Run what the
+   block does not — lint, build, server checks — and write Status and
+   Verified from what they *said*, never "tests pass" from memory. If
+   something is broken, the entry says so. A handover that hides a failure
+   costs the next session more than the failure does.
 
 **CI is recorded, not waited on.** Read `gh run list` once. A run that is
 queued or in progress is recorded as pending, with its run id and commit, in
@@ -180,6 +182,7 @@ and anything left for them.
 | Write "all tests pass" | Run them. Record what they said. |
 | Run the suite again before committing | The Start here run is the Verified run. Once. |
 | Wait for the Start here run before writing | It runs in the background; write the entry meanwhile. |
+| `grep -v` the progress dots out of the Start here output | `cat` it whole. The filter drops result lines too. |
 | Read the log, `git log` and `git status` one by one | One command, §2 step 1. |
 | Rewrite a slot nothing changed | One line naming the entry that has it. |
 | `gh run watch` until CI finishes | Record the run id as pending; Start here checks it. |
