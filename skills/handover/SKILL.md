@@ -103,6 +103,11 @@ short view of **only the latest entry**:
      without asking. The slot is one line naming that file, then the two or
      three commands that matter most (machine name, get current, confirm
      green).
+4. If the file has other status sections — a `## Next`, a task list, a
+   phase summary — rewrite each to the current position and pointers: the
+   phase and task now, then where the rest is written (the plan, the
+   ledger, the log). History in them (finished tasks, their dates and
+   rulings) moves to the log verbatim first, as in step 2.
 
 Do it in the same commit, and say in your closing message how many entries
 moved and the file's size before and after.
