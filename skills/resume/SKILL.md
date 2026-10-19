@@ -59,13 +59,38 @@ issue #, local git). If `gh` failed, say GitHub was not checked.
 
 ## 5. Start here: run it or offer it
 
-**Run it** when the pull fast-forwarded or had nothing new, **and** step 2
-found nothing on this machine only. Run it in the background where the
-harness allows, send the report without waiting, then give the result. Skip
-its get-current lines (the pull is done). At the first failing line, stop and
-report the line and its output; do not fix it.
+**Nothing runs** after a refused pull, or when step 2 found uncommitted,
+stashed or unpushed work: show the block and offer it. Worktrees aren't
+local-only work.
 
-**Otherwise show it and offer.** Until it runs, nothing is "passing".
+Otherwise, in this order. No tier headings means the whole block is Full.
+Send all output to a file and read it whole, never through `tail`, `head`,
+`grep` or `sed`. At the first failing line, stop and report it with its
+output; don't fix it.
+
+1. **Every resume:** run it in the foreground, minus `git pull` (done).
+2. **Decide Full.** `<sha>` is the latest Verified line's `` at `<sha>` ``.
+   Run Full if any box is ticked:
+   - [ ] This machine differs from Verified's (case-folded, `’` read as `'`).
+   - [ ] No `<sha>`, or `git cat-file -e <sha>` fails.
+   - [ ] `git diff --name-only <sha> HEAD` lists a path not ending in `.md`
+     (a `.sh` under `docs/` is code).
+   - [ ] Verified reports a failure, or "Not verified:" something Full covers.
+   - [ ] Verified's date is more than 7 days before today.
+
+   No box ticked: skip Full. Commits touching only `.md` files, the handover
+   or another machine's, tick no box.
+3. **Full:** run it in the background; send the report, then its result.
+4. **Check line**, one in the report:
+   - Skipped: "Checks: quick passed on Akash's Mac Studio; full skipped,
+     verified on Akash's Mac Studio at `c155cd3`, docs-only since."
+   - Ran: "Checks: all passed on Akash's MacBook Air (full ran: other Mac
+     last verified)."
+   - Failed: "Checks: `make test` failed on Akash's Mac Studio:", then
+     its output.
+
+**Cloud session:** always run Full; skip lines marked `# needs a real Mac`
+and say so in the check line. **On demand** runs only when Next names it.
 
 ## Red flags
 
@@ -76,3 +101,7 @@ report the line and its output; do not fix it.
 | Run Start here after a refused pull, or with local-only work | Show it and offer. |
 | Run the block's own `git pull` or `checkout` | The pull is done. Run the rest. |
 | List PRs only | PRs and issues. |
+| Ran Full on the same Mac with only docs changed | No box ticked: skip Full and say so in the check line. |
+| Said checks pass when Full was skipped | Say Full was skipped, naming the Verified machine and sha. |
+| Skipped Full because the change looks small | Any path not ending in `.md` ticks the box. Run Full. |
+| Treated a worktree as local-only work | Worktrees neither block the checks nor trigger Full. |

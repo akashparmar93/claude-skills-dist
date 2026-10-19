@@ -35,9 +35,11 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANIFEST = os.path.join(REPO, "skills.json")
@@ -218,10 +220,29 @@ def gh(url):
         raise
 
 
+_key_locks = {}
+_key_locks_guard = threading.Lock()
+
+
+def _cached(cache, key, compute):
+    """cache[key], computing it once even when threads ask at the same time.
+    A failed compute caches nothing, so the next caller tries again."""
+    with _key_locks_guard:
+        lock = _key_locks.setdefault((id(cache), key), threading.Lock())
+    with lock:
+        if key not in cache:
+            cache[key] = compute()
+    return cache[key]
+
+
+_ref_cache = {}
+
+
 def resolve_ref(repo, ref):
-    """ref (branch/tag/sha) -> concrete commit sha."""
-    data = json.loads(gh("https://api.github.com/repos/%s/commits/%s" % (repo, ref)))
-    return data["sha"]
+    """ref (branch/tag/sha) -> concrete commit sha. Resolved once per process,
+    so every skill sharing an upstream sees the same commit."""
+    return _cached(_ref_cache, (repo, ref), lambda: json.loads(
+        gh("https://api.github.com/repos/%s/commits/%s" % (repo, ref)))["sha"])
 
 
 _tree_cache = {}
@@ -229,13 +250,12 @@ _tree_cache = {}
 
 def upstream_tree(repo, sha):
     """{relpath: git blob sha} for an entire repo at a commit."""
-    key = (repo, sha)
-    if key not in _tree_cache:
+    def fetch():
         data = json.loads(gh("https://api.github.com/repos/%s/git/trees/%s?recursive=1" % (repo, sha)))
         if data.get("truncated"):
             die("tree for %s@%s is truncated; repo too large for the API path" % (repo, sha[:8]))
-        _tree_cache[key] = {t["path"]: t["sha"] for t in data.get("tree", []) if t["type"] == "blob"}
-    return _tree_cache[key]
+        return {t["path"]: t["sha"] for t in data.get("tree", []) if t["type"] == "blob"}
+    return _cached(_tree_cache, (repo, sha), fetch)
 
 
 def upstream_files(origin, sha):
@@ -1831,9 +1851,10 @@ def _check_one(name, spec):
     }
 
 
-def _check_mods(m):
+def _check_mods(m, out=None):
     """Compare each listed mod's marketplace-latest with the version skills.json
-    records, printing a line per mod. Returns (updates, errors).
+    records, printing a line per mod to out (stdout by default). Returns
+    (updates, errors).
 
     The latest version comes from `plugin install <id>` on a mod already
     installed here: that exits 0 and reports installedVersion and
@@ -1847,7 +1868,7 @@ def _check_mods(m):
     updates = errors = 0
 
     def line(label, colour, mod_id, text):
-        print("  %-9s %-32s %s" % (colour(label), mod_id, text))
+        print("  %-9s %-32s %s" % (colour(label), mod_id, text), file=out)
 
     refreshed = {}  # marketplace -> failure text, or None when it refreshed
     for market in sorted({marketplace_name(i) for i in listed} - {""}):
@@ -1903,15 +1924,24 @@ def _check_mods(m):
     return updates, errors
 
 
+CHECK_WORKERS = 8  # each lookup is about 1s of waiting on GitHub
+
+
 def cmd_check(args):
     m = load_manifest()
     names = [args.name] if args.name else sorted(m["skills"])
     stale = errors = 0
     print(bold("checking %d skill(s) against upstream…" % len(names)))
     print()
-    for name in names:
-        spec = m["skills"].get(name) or die("unknown skill: %s" % name)
-        r = _check_one(name, spec)
+    specs = {name: m["skills"].get(name) or die("unknown skill: %s" % name) for name in names}
+    # Every skill and the mods are looked up at once; the report is printed
+    # afterwards in name order, with the mods' lines held until the skills'.
+    mod_lines = io.StringIO()
+    with ThreadPoolExecutor(max_workers=CHECK_WORKERS) as pool:
+        # a named check is one skill; mods are part of a full sweep
+        mods = None if args.name else pool.submit(_check_mods, m, mod_lines)
+        results = list(pool.map(lambda name: _check_one(name, specs[name]), names))
+    for name, r in zip(names, results):
         if r["state"] == "local":
             print("  %-9s %-32s %s" % (dim("local"), name, dim("no upstream — owned by this repo")))
             continue
@@ -1942,9 +1972,8 @@ def cmd_check(args):
         rest = len(r["modified"]) + len(r["added_upstream"]) - args.files
         if rest > 0:
             print(dim("              … and %d more" % rest))
-    mod_stale = mod_errors = 0
-    if not args.name:  # a named check is one skill; mods are part of a full sweep
-        mod_stale, mod_errors = _check_mods(m)
+    mod_stale, mod_errors = mods.result() if mods else (0, 0)
+    sys.stdout.write(mod_lines.getvalue())
     print()
     if stale:
         print(bold("%d skill(s) have upstream changes" % stale)
