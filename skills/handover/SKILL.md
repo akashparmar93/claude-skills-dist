@@ -51,10 +51,11 @@ Never land a *failing* test on `main`.
    --oneline` since the previous handover, the previous entry alone (`sed -n
    '/^## <its heading>/,/^## /p' <log>`), and `gh run list --limit 3`. Read
    further only where that output points.
-2. **Start the Start here block (§3) in the background**, all of it,
-   verbatim, its output to a file: the harness's background run, or `bash
-   start-here.sh > start-here.out 2>&1 &`. Its test run is the Verified test
-   run: the suite runs once, there.
+2. **Start the Start here block (§3) in the background**: its Every resume
+   and Full tiers, verbatim, not On demand, its output to a file: the
+   harness's background run, or `bash start-here.sh > start-here.out 2>&1 &`.
+   `git rev-parse --short HEAD` as it starts is Verified's `<sha>`. Its test
+   run is the Verified test run: the suite runs once, there.
 3. **Write the entry while it runs**, every slot but Status and Verified.
 4. **When it has finished, read its output whole** — `cat` it, or page it
    by its `===` markers; never through a filter such as `grep -v`: one
@@ -90,19 +91,18 @@ short view of **only the latest entry**:
    own order (a new log keeps the order they had).
 3. Write the short view into the block: every slot as in the full entry,
    except these:
-   - **Verified** is shorter than the log's: the machine, the time, the
-     test run's result (`make test` -> `Ran 31 tests ... OK`), what is
-     broken or not verified, and a pointer to the log entry, which keeps
-     every other command's result.
+   - **Verified** is shorter than the log's: the machine, the date and
+     time, then `` at `<sha>` ``, the test run's result
+     (`make test` -> `Ran 31 tests ... OK`), what is broken or not
+     verified, and a pointer to the log entry, which keeps every other
+     command's result.
    - **Landed, and why** is one line per change or decision, naming where
      its reasons are written — the log entry, a commit, a spec or plan
      section.
    - **Start here**, when the block is more than five lines: the whole block
      goes in the project's Start here file, replacing what it held —
      `docs/start-here.md` unless the project keeps one elsewhere; create it
-     without asking. The slot is one line naming that file, then the two or
-     three commands that matter most (machine name, get current, confirm
-     green).
+     without asking. The slot is one line naming that file and its tiers.
 4. If the file has other status sections — a `## Next`, a task list, a
    phase summary — rewrite each to the current position and pointers: the
    phase and task now, then where the rest is written (the plan, the
@@ -130,16 +130,33 @@ text.
 - **Status** — one sentence. What is done and landed; what is not.
 - **Verified** — one line, however many commands ran, even where earlier
   entries list them: the machine by name (`scutil --get ComputerName`, or
-  `hostname`), the date and time, each command and its headline result, and
-  what could not be verified:
+  `hostname`), the date and time, then `` at `<sha>` `` (at least 7 hex
+  characters, `HEAD` when the Start here run began), each command and its
+  headline result, and what could not be verified:
 
   ```
-  - **Verified** — Akash’s MacBook Air, 2026-10-15 23:21: `make test` -> `Ran 31 tests ... OK`; `df -h /` (15:02) -> 61% used. Not verified: a restore.
+  - **Verified** — Akash’s MacBook Air, 2026-10-15 23:21 EAT, at `4153e97`: `make test` -> `Ran 31 tests ... OK`; `df -h /` (15:02) -> 61% used. Not verified: a restore.
   ```
-- **Start here** — the block a cold session pastes first: its first command
-  prints the machine name, then get current, get running, confirm green, and
-  `gh run list --commit <sha>` for any CI run left pending. It is the block
-  §2 ran; "expected output" means output you have actually seen.
+- **Start here** — the block a cold session pastes first, and the one §2
+  ran. It is these headings in this order, each followed by one ```` ```bash ````
+  block: `###` in a Start here file, and in a log entry one level below the
+  entry's own heading (`#### Full` under `### 2026-10-19 …`):
+  1. `Every resume` — prints the machine name, gets current (pull,
+     `sync`, a lockfile-gated `npm ci`), then the read-only lines that guard
+     against the other Mac differing: toolchain versions, imports, status.
+  2. `Full` — the rest: get running, confirm green (suite, lint, build),
+     and `gh run list --commit <sha>` for any CI run left pending.
+  3. `On demand` — lines that need Akash (`# needs Akash: Touch ID`) or
+     have never caught anything. No such lines: no heading.
+
+  A project that keeps a Start here file holds the block there, and a log
+  entry's slot is one line naming that file and its tiers. A line already
+  under a tier heading keeps its tier; a new or untiered line goes in the
+  tier whose description above fits it. Each line's comment is today's
+  expected value, per machine where they differ — output you have actually
+  seen. A Start here file is those commands and comments, under 10 KB; each how-to paragraph in it moves to the project doc it
+  belongs in (one that exists, or a new one under `docs/`), leaving a
+  one-line pointer in its place.
 - **Landed, and why** — what changed, plus the decisions made this session and
   their reasons. These exist nowhere else.
 - **Stops here** — what a cold reader would wrongly assume is finished. Green
@@ -195,5 +212,7 @@ and anything left for them.
 | Push the branch and stop | Merge to `main`. A branch is not a handover. |
 | `pkill -f python` | Find the pid you started. Kill that one. |
 | Give next steps as prose only | Prose plus the runnable **Start here** block. |
+| Carry an old expected value forward | Today's value only. Older ones are in the log's Verified lines. |
+| Delete a procedure to shrink Start here | Move it to its project doc; leave a one-line pointer. |
 | Revert unfinished work so `main` stays green | Commit it with the test skipped. Code belongs in the tree, not quoted in a log. |
 | "The note says it's open, but the answer is obvious" | Written down as open means open. Park it. |
