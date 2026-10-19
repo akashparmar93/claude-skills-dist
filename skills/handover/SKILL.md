@@ -193,8 +193,14 @@ git branch -r                   # nothing stranded — the work is on main
 git rev-parse HEAD origin/main  # identical
 ```
 
-Then tell the user in your reply: what you parked, what you could not verify,
-and anything left for them.
+Then end the turn, in this order:
+
+1. **The next-step box**, if the harness has one (a wrap-up tool), with the
+   recap alone: no question, no buttons. A box that asks a question ends the
+   turn, and a closing message after it is never shown.
+2. **Then the closing message**, in full: what you parked, what you could not
+   verify, and anything left for them. Its last line is your question for
+   them, if there is one.
 
 ## Red flags
 
@@ -212,6 +218,7 @@ and anything left for them.
 | Push the branch and stop | Merge to `main`. A branch is not a handover. |
 | `pkill -f python` | Find the pid you started. Kill that one. |
 | Give next steps as prose only | Prose plus the runnable **Start here** block. |
+| Ask the user's question in the next-step box | Ask it as the closing message's last line. The box gets the recap alone; the closing message follows it. |
 | Carry an old expected value forward | Today's value only. Older ones are in the log's Verified lines. |
 | Delete a procedure to shrink Start here | Move it to its project doc; leave a one-line pointer. |
 | Revert unfinished work so `main` stays green | Commit it with the test skipped. Code belongs in the tree, not quoted in a log. |

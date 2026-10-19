@@ -95,6 +95,15 @@ output; don't fix it.
 **Cloud session:** always run Full; skip lines marked `# needs a real Mac`
 and say so in the check line. **On demand** runs only when Next names it.
 
+## 6. End the turn: box, then report
+
+1. **The next-step box**, if the harness has one (a wrap-up tool), with the
+   recap alone: no question, no buttons. A box that asks a question ends the
+   turn, and a report after it is never shown.
+2. **Then the report**, §4's four groups and §5's check line, in full, as
+   your closing message. Its last line repeats Waiting on you's question, if
+   there is one, where the user answers it.
+
 ## Red flags
 
 | About to... | Instead |
@@ -108,3 +117,4 @@ and say so in the check line. **On demand** runs only when Next names it.
 | Said checks pass when Full was skipped | Say Full was skipped, naming the Verified machine and sha. |
 | Skipped Full because the change looks small | Any path not ending in `.md` ticks the box. Run Full. |
 | Treated a worktree as local-only work | Worktrees neither block the checks nor trigger Full. |
+| Ask Waiting on you's question in the next-step box | Ask it as the report's last line. The box gets the recap alone; the report follows it. |
