@@ -33,6 +33,9 @@ Repeat the git reads for every repo the entry's Start here names.
 - The entry names no machine: say so, and treat its machine facts as
   unconfirmed here.
 - Uncommitted, unpushed or stashed work is reported as "on this machine only".
+  Unpushed commits on a branch checked out in another worktree
+  (`git worktree list`) are a worktree, not unpushed work: name its path and
+  branch.
 
 ## 3. Get current: fast-forward or stop
 
@@ -60,8 +63,8 @@ issue #, local git). If `gh` failed, say GitHub was not checked.
 ## 5. Start here: run it or offer it
 
 **Nothing runs** after a refused pull, or when step 2 found uncommitted,
-stashed or unpushed work: show the block and offer it. Worktrees aren't
-local-only work.
+stashed or unpushed work: show the block and offer it. Worktrees, and the
+unpushed commits on their branches, aren't local-only work.
 
 Otherwise, in this order. No tier headings means the whole block is Full.
 Send all output to a file and read it whole, never through `tail`, `head`,
