@@ -9,7 +9,9 @@ turns it off (`skillctl eval` sets it for its headless runs).
 
 It runs unattended in every repo the owner opens, so it never touches their
 work: it only pulls when the checkout is on `main` with an upstream, clean and
-not ahead, and the pull is --ff-only. Every child (git and the sync) runs in
+not ahead, and the pull is --ff-only. A pull that fails with `cannot lock
+ref` (another fetch moved origin/main at the same moment) is tried once more.
+Every child (git and the sync) runs in
 a session of its own with stdin from /dev/null and GIT_TERMINAL_PROMPT=0, so
 neither git nor ssh can prompt, and is bounded by a timeout that kills its
 whole process group. One session at a time, by a non-blocking lock.
@@ -29,9 +31,11 @@ import os
 import signal
 import subprocess
 import sys
+import time
 
 # Worst case, every child timing out: six local git calls, the pull and the
 # sync, 6 * 3 + 10 + 30 = 58 seconds, inside Claude Code's 60 for a hook.
+# A pull retried after losing the ref race shares its 10 with the first try.
 PULL_TIMEOUT = 10  # seconds
 SYNC_TIMEOUT = 30
 GIT_TIMEOUT = 3    # the local, read-only git calls
@@ -105,7 +109,13 @@ def update(repo):
         return "skipped: local commits"
 
     old = git_out(repo, "rev-parse", "HEAD")
+    start = time.monotonic()
     proc = git(repo, "pull", "--ff-only", "--quiet", step="pull", timeout=PULL_TIMEOUT)
+    if proc.returncode != 0 and "cannot lock ref" in (proc.stderr or ""):
+        # Another fetch (a session's own `git fetch`) moved the remote-tracking
+        # ref under this one. Try once more, inside the same budget.
+        proc = git(repo, "pull", "--ff-only", "--quiet", step="pull",
+                   timeout=PULL_TIMEOUT - (time.monotonic() - start))
     if proc.returncode != 0:
         return "failed: pull: %s" % reason(proc)
     new = git_out(repo, "rev-parse", "HEAD")
