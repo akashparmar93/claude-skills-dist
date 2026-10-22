@@ -9,14 +9,14 @@
   },
   "skills": {
     "brainstorming": {
-      "hash": "sha256:01b66470352a1c04148a55f15ffc4450363f00713b1c46df05bb4bd80ad61b24",
+      "hash": "sha256:c7df2e2fbd0ee30184f631f0ae196a6b591cec122b75a40c93455d947f215a67",
       "origin": {
         "path": "skills/brainstorming",
         "ref": "main",
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
         "ref": "main"
       }
     },
@@ -70,19 +70,19 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
         "ref": "main"
       }
     },
     "executing-plans": {
-      "hash": "sha256:6a78feadeb4fc5a41d751cc5ed01ccba53e55d01fe3e63031114cefd6b92b0ce",
+      "hash": "sha256:51dc855ca9759849339dfcc67334c47bdf05b623cc241e500f70289907917b7a",
       "origin": {
         "path": "skills/executing-plans",
         "ref": "main",
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
         "ref": "main"
       }
     },
@@ -94,7 +94,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
         "ref": "main"
       }
     },
@@ -103,14 +103,14 @@
       "origin": null
     },
     "impeccable": {
-      "hash": "sha256:c09208c5ac91346e4c1202f741059d8e97cc0bc40feec6aa967c11fc30326ced",
+      "hash": "sha256:7c133284d278b77e99065c537002e3371d90c44e56bad58e05d2ce8661be14b4",
       "origin": {
         "path": ".claude/skills/impeccable",
         "ref": "main",
         "repo": "pbakaus/impeccable"
       },
       "pin": {
-        "commit": "0665bd812ae0908fcab17b96fd4f840defb882d9",
+        "commit": "8644175285360c166e57b1e35ecadfbc85ff5209",
         "ref": "main"
       }
     },
@@ -146,7 +146,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
         "ref": "main"
       }
     },
@@ -158,7 +158,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
         "ref": "main"
       }
     },
@@ -175,14 +175,14 @@
       "origin": null
     },
     "subagent-driven-development": {
-      "hash": "sha256:7e4d873926af5e6b862214d334c0c03ce9d961553bd46bf524c9a0c4e86841fe",
+      "hash": "sha256:249b79397489aaf48e90da699e777cd1f88073a85160c45594107242b7e5a5a0",
       "origin": {
         "path": "skills/subagent-driven-development",
         "ref": "main",
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
         "ref": "main"
       }
     },
@@ -194,7 +194,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
         "ref": "main"
       }
     },
@@ -206,7 +206,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
         "ref": "main"
       }
     },
@@ -230,7 +230,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
         "ref": "main"
       }
     },
@@ -242,7 +242,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
         "ref": "main"
       }
     },
@@ -254,7 +254,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
         "ref": "main"
       }
     },
@@ -266,19 +266,19 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
         "ref": "main"
       }
     },
     "writing-skills": {
-      "hash": "sha256:a573104aeca5fbd4d0f6a67a03ab7d0ac57979fcbe1614e9fc7d3383d5e835b9",
+      "hash": "sha256:9ca4cdbef07abe834a36aeed5434f0afed6d3679dab61041e0ba9cf9a99ea425",
       "origin": {
         "path": "skills/writing-skills",
         "ref": "main",
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
         "ref": "main"
       }
     }
