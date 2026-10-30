@@ -122,10 +122,15 @@ def save_manifest(m):
 # ------------------------------------------------------------------ hashing ---
 
 
-def git_blob_sha(path):
-    """Git's own blob hash, so we can compare against GitHub trees for free."""
+def git_blob_sha(path, crlf_to_lf=False):
+    """Git's own blob hash, so we can compare against GitHub trees for free.
+
+    crlf_to_lf hashes the file as git stored it when an upstream
+    `.gitattributes` `eol=crlf` made the vendored tarball's copy CRLF."""
     with open(path, "rb") as f:
         data = f.read()
+    if crlf_to_lf:
+        data = data.replace(b"\r\n", b"\n")
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
@@ -1836,8 +1841,10 @@ def _check_one(name, spec):
     except Exception as e:
         return {"name": name, "state": "error", "detail": "%s: %s" % (type(e).__name__, e)}
 
-    local = {rel: git_blob_sha(ap) for rel, ap in walk_files(src).items()}
-    modified = sorted(k for k in local if k in up and local[k] != up[k])
+    files = walk_files(src)
+    local = {rel: git_blob_sha(ap) for rel, ap in files.items()}
+    modified = sorted(k for k in local if k in up and local[k] != up[k]
+                      and git_blob_sha(files[k], crlf_to_lf=True) != up[k])
     added_up = sorted(k for k in up if k not in local)
     only_local = sorted(k for k in local if k not in up)
 
