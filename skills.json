@@ -9,14 +9,14 @@
   },
   "skills": {
     "brainstorming": {
-      "hash": "sha256:c7df2e2fbd0ee30184f631f0ae196a6b591cec122b75a40c93455d947f215a67",
+      "hash": "sha256:e4bb93254e14486d0a543ff86ca65b4531a7f7cb406fd60fc96dc481952ec6a2",
       "origin": {
         "path": "skills/brainstorming",
         "ref": "main",
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+        "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "ref": "main"
       }
     },
@@ -28,7 +28,7 @@
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "9b68f7ed12b05e7efaff18e65c5a3fc2849fd0a4",
+        "commit": "b4ee71d557d96e3cbc14f88fa6e953a1362865f5",
         "ref": "main"
       }
     },
@@ -40,7 +40,7 @@
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "9b68f7ed12b05e7efaff18e65c5a3fc2849fd0a4",
+        "commit": "b4ee71d557d96e3cbc14f88fa6e953a1362865f5",
         "ref": "main"
       }
     },
@@ -70,19 +70,19 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+        "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "ref": "main"
       }
     },
     "executing-plans": {
-      "hash": "sha256:51dc855ca9759849339dfcc67334c47bdf05b623cc241e500f70289907917b7a",
+      "hash": "sha256:165ceffeceac8d32e818120cd2f7ab4986d255433ed36ea5d6da56e7cc004989",
       "origin": {
         "path": "skills/executing-plans",
         "ref": "main",
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+        "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "ref": "main"
       }
     },
@@ -94,7 +94,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+        "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "ref": "main"
       }
     },
@@ -103,14 +103,14 @@
       "origin": null
     },
     "impeccable": {
-      "hash": "sha256:69bdb27c8ebb9215640d0d5721fd42acca69b2b71abdb8f1e3a4fa538da071da",
+      "hash": "sha256:2ca1bb13c4f17411af0e80dafee5621a832f48166f6fff9a9e1a5d7f2e124738",
       "origin": {
         "path": ".claude/skills/impeccable",
         "ref": "main",
         "repo": "pbakaus/impeccable"
       },
       "pin": {
-        "commit": "df3a4abe7d0840d5f60324812c432e00b66a4e75",
+        "commit": "fb46cc6e356253a5d9945c4e3667c20c3d699cc8",
         "ref": "main"
       }
     },
@@ -134,7 +134,7 @@
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "9b68f7ed12b05e7efaff18e65c5a3fc2849fd0a4",
+        "commit": "b4ee71d557d96e3cbc14f88fa6e953a1362865f5",
         "ref": "main"
       }
     },
@@ -146,7 +146,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+        "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "ref": "main"
       }
     },
@@ -158,7 +158,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+        "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "ref": "main"
       }
     },
@@ -175,26 +175,26 @@
       "origin": null
     },
     "subagent-driven-development": {
-      "hash": "sha256:249b79397489aaf48e90da699e777cd1f88073a85160c45594107242b7e5a5a0",
+      "hash": "sha256:34eccdc358aa26f8671c71af54ad729ab709a2c41d4c9391e7903d1da3542d65",
       "origin": {
         "path": "skills/subagent-driven-development",
         "ref": "main",
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+        "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "ref": "main"
       }
     },
     "systematic-debugging": {
-      "hash": "sha256:7c2628773e52f1687e74f9d802f2ea1c2cbae24ef5ca3fda0b8f21340f50d590",
+      "hash": "sha256:0c8a24ab45376f6fccf5162380a8f782f2bbca7dad8e7e0ddcae19c8d7259933",
       "origin": {
         "path": "skills/systematic-debugging",
         "ref": "main",
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+        "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "ref": "main"
       }
     },
@@ -206,7 +206,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+        "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "ref": "main"
       }
     },
@@ -218,7 +218,7 @@
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "9b68f7ed12b05e7efaff18e65c5a3fc2849fd0a4",
+        "commit": "b4ee71d557d96e3cbc14f88fa6e953a1362865f5",
         "ref": "main"
       }
     },
@@ -230,7 +230,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+        "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "ref": "main"
       }
     },
@@ -242,7 +242,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+        "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "ref": "main"
       }
     },
@@ -254,7 +254,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+        "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "ref": "main"
       }
     },
@@ -266,7 +266,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+        "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "ref": "main"
       }
     },
@@ -278,7 +278,7 @@
         "repo": "obra/superpowers"
       },
       "pin": {
-        "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+        "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "ref": "main"
       }
     }
