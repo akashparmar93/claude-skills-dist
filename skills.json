@@ -28,7 +28,7 @@
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "b4ee71d557d96e3cbc14f88fa6e953a1362865f5",
+        "commit": "9b243662ff98d392bc0a95b865a554583d71be75",
         "ref": "main"
       }
     },
@@ -40,7 +40,7 @@
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "b4ee71d557d96e3cbc14f88fa6e953a1362865f5",
+        "commit": "9b243662ff98d392bc0a95b865a554583d71be75",
         "ref": "main"
       }
     },
@@ -103,14 +103,14 @@
       "origin": null
     },
     "impeccable": {
-      "hash": "sha256:2ca1bb13c4f17411af0e80dafee5621a832f48166f6fff9a9e1a5d7f2e124738",
+      "hash": "sha256:58e6f2ba074cb6bc2df530ffc2c615c19ea160d637ad12be3dc88ee34a3e649d",
       "origin": {
         "path": ".claude/skills/impeccable",
         "ref": "main",
         "repo": "pbakaus/impeccable"
       },
       "pin": {
-        "commit": "fb46cc6e356253a5d9945c4e3667c20c3d699cc8",
+        "commit": "d41d9860b0094dcb68030657da63461212835aaa",
         "ref": "main"
       }
     },
@@ -134,7 +134,7 @@
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "b4ee71d557d96e3cbc14f88fa6e953a1362865f5",
+        "commit": "9b243662ff98d392bc0a95b865a554583d71be75",
         "ref": "main"
       }
     },
@@ -218,7 +218,7 @@
         "repo": "JuliusBrussee/caveman"
       },
       "pin": {
-        "commit": "b4ee71d557d96e3cbc14f88fa6e953a1362865f5",
+        "commit": "9b243662ff98d392bc0a95b865a554583d71be75",
         "ref": "main"
       }
     },
