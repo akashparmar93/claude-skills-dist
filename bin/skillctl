@@ -21,6 +21,7 @@ Python 3.13+, standard library only.
 
 import argparse
 import copy
+import filecmp
 import fnmatch
 import hashlib
 import http.client
@@ -45,6 +46,10 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANIFEST = os.path.join(REPO, "skills.json")
 SKILLS_SRC = os.path.join(REPO, "skills")
 INSTALL_DIR = os.path.expanduser("~/.claude/skills")
+# A skill's subagents (its manifest entry's `agents` block), vendored at the
+# skill's own pin and linked one file each into AGENTS_DIR.
+AGENTS_SRC = os.path.join(REPO, "agents")
+AGENTS_DIR = os.path.expanduser("~/.claude/agents")
 # Deliberately NOT under INSTALL_DIR: Claude Code loads every directory there as
 # a skill, so a backup kept alongside its original would be loaded as a second,
 # near-identical skill — doubling context and making activation ambiguous.
@@ -66,7 +71,7 @@ DESKTOP_SYNC = "synced"
 # What `skillctl publish` copies into the public mirror. Everything else stays
 # private: OPEN.md and SETUP.md carry device names, a private repo name and an
 # email address, and eval/ and setup-shell have no role on a cloud box.
-PUBLISH_PATHS = ["skills", "skills.json", "CLAUDE.md", "hooks",
+PUBLISH_PATHS = ["skills", "skills.json", "CLAUDE.md", "hooks", "agents",
                  "bin/skillctl", "bin/cloud-setup.sh", "bin/cloud-sync.sh"]
 
 # ---------------------------------------------------------------- terminal ---
@@ -156,6 +161,39 @@ def tree_hash(root):
     for rel in sorted(files):
         h.update(rel.encode() + b"\0")
         with open(files[rel], "rb") as f:
+            h.update(f.read())
+        h.update(b"\0")
+    return "sha256:" + h.hexdigest()
+
+
+def agents_origin(spec):
+    """The origin to fetch a skill's agents from: the skill's own repo and ref
+    with the `agents` block's path and filters. None without both."""
+    origin, agents = (spec or {}).get("origin"), (spec or {}).get("agents")
+    if not origin or not agents:
+        return None
+    return {"repo": origin["repo"], "ref": origin.get("ref", "main"),
+            "path": agents.get("path", ""), "include": agents.get("include"),
+            "exclude": agents.get("exclude")}
+
+
+def agent_files(spec):
+    """The agent file names a skill's entry records, as vendored."""
+    return list(((spec or {}).get("agents") or {}).get("files") or [])
+
+
+def declared_agents(manifest):
+    """Agent file name -> the skill whose entry declares it."""
+    return {f: name for name, spec in sorted(manifest.get("skills", {}).items())
+            for f in agent_files(spec)}
+
+
+def agents_hash(files):
+    """Content hash of AGENTS_SRC/<f> for each name, in tree_hash's encoding."""
+    h = hashlib.sha256()
+    for rel in sorted(files):
+        h.update(rel.encode() + b"\0")
+        with open(os.path.join(AGENTS_SRC, rel), "rb") as f:
             h.update(f.read())
         h.update(b"\0")
     return "sha256:" + h.hexdigest()
@@ -429,7 +467,7 @@ def pin_fingerprint(manifest):
             origin.get("path", ""),
             (spec.get("pin") or {}).get("commit", ""),
             spec.get("hash", ""),
-        )))
+        ) + ((spec["agents"].get("hash", ""),) if spec.get("agents") else ())))
     # `check` counts mod updates into its record too, so an `update` that
     # moves only a mod must supersede it. No mods leaves the digest as it was.
     for mod_id, spec in sorted(manifest_mods(manifest).items()):
@@ -567,6 +605,14 @@ def cmd_status(args):
         else green(hline) if hstates and all(v == "installed" for v in hstates.values())
         else yellow(hline)))
 
+    astates = agent_states(m)
+    areasons = agent_reasons(astates)
+    if astates:
+        linked = sum(1 for v in astates.values() if v == "linked")
+        print(bold("agents           ") + (
+            red(", ".join("%s %s" % (f, s) for f, s in sorted(astates.items()) if s != "linked"))
+            if areasons else green("linked (%d/%d)" % (linked, len(astates)))))
+
     state = load_state()
     verdict, stale = check_freshness(state, m)
     checked = age_of(state.get("last_check"))
@@ -669,6 +715,7 @@ def cmd_status(args):
     elif cmd == "foreign":
         reasons.append("CLAUDE.md differs from repo")
     reasons.extend(hreasons)
+    reasons.extend(areasons)
     for state, reason in (("missing", "mods missing"), ("behind", "mods behind"),
                           ("waiting", "mods waiting for approval")):
         if state in (mstates or {}).values():
@@ -691,7 +738,8 @@ def cmd_status(args):
         else yellow("%d/%d %s; %s" % (ok, total, verb, ", ".join(reasons)))))
     if args.json:
         print(json.dumps({"repo": st, "skills": {n: s for n, s, _, _ in rows}, "unmanaged": unmanaged,
-                          "platform": platform, "hooks": hstates, "mods": mstates}, indent=2))
+                          "platform": platform, "hooks": hstates, "agents": astates,
+                          "mods": mstates}, indent=2))
     return 0 if healthy else 1
 
 
@@ -1657,6 +1705,95 @@ def prune_removed_links(managed, dry_run=False):
     return pruned
 
 
+def agent_state(fname):
+    """How AGENTS_DIR holds <fname>: linked, missing, wrong-link (a link to
+    anywhere but AGENTS_SRC/<fname>) or real-file. Returns (state, path)."""
+    path = os.path.join(AGENTS_DIR, fname)
+    if not os.path.lexists(path):
+        return "missing", path
+    if os.path.islink(path):
+        same = os.path.realpath(path) == os.path.realpath(os.path.join(AGENTS_SRC, fname))
+        return ("linked" if same and os.path.isfile(path) else "wrong-link"), path
+    return "real-file", path
+
+
+def agent_states(m):
+    """Declared agent file name -> its agent_state on this device."""
+    return {f: agent_state(f)[0] for f in declared_agents(m)}
+
+
+def agent_reasons(states):
+    """Verdict reasons, e.g. "1 agent(s) missing", for agents not linked."""
+    tally = {}
+    for s in states.values():
+        if s != "linked":
+            tally[s] = tally.get(s, 0) + 1
+    return ["%d agent(s) %s" % (n, s) for s, n in sorted(tally.items())]
+
+
+def prune_agent_links(declared, dry_run=False):
+    """Unlink each link in AGENTS_DIR that points into AGENTS_SRC under a name
+    no entry declares, read rather than followed so a link whose file is gone
+    counts. Real files and links to anywhere else are the owner's."""
+    if not os.path.isdir(AGENTS_DIR):
+        return []
+    src = os.path.realpath(AGENTS_SRC)
+    pruned = []
+    for name in sorted(os.listdir(AGENTS_DIR)):
+        path = os.path.join(AGENTS_DIR, name)
+        if name in declared or not os.path.islink(path):
+            continue
+        target = os.path.normpath(os.path.join(AGENTS_DIR, os.readlink(path)))
+        if os.path.realpath(os.path.dirname(target)) != src:
+            continue
+        print(yellow("  unlink  ") + "agent %s (no skill declares it)" % name)
+        if not dry_run:
+            os.unlink(path)
+        pruned.append(name)
+    return pruned
+
+
+def sync_agents(args, m):
+    """Link every declared agent into AGENTS_DIR and prune our stale links.
+
+    Not from a linked worktree unless --force, as for hooks: the links would
+    point into a directory that vanishes with the worktree."""
+    declared = declared_agents(m)
+    if not declared and not os.path.isdir(AGENTS_DIR):
+        return 0
+    if not args.force and in_linked_worktree(REPO):
+        print(yellow("  agents  ") + "not linked from a worktree (%s) — run sync "
+              "from the main checkout, or --force" % REPO)
+        return 0
+    changed = len(prune_agent_links(set(declared), args.dry_run))
+    for fname in sorted(declared):
+        src = os.path.join(AGENTS_SRC, fname)
+        if not os.path.isfile(src):
+            print(red("  skip    ") + "agent %s (missing from agents/)" % fname)
+            continue
+        state, path = agent_state(fname)
+        if state == "linked":
+            continue
+        if state == "real-file" and not filecmp.cmp(src, path, shallow=False) \
+                and not args.force:
+            print(red("  drift   ") + "agent %s — %s differs from the repo; "
+                  "re-run with --force to replace it (a backup is kept)" % (fname, path))
+            continue
+        print(green("  link    ") + "agent %s" % fname)
+        changed += 1
+        if args.dry_run:
+            continue
+        os.makedirs(AGENTS_DIR, exist_ok=True)
+        if state == "real-file" and not filecmp.cmp(src, path, shallow=False):
+            backup = backup_dest(fname)
+            shutil.move(path, backup)
+            print(dim("          kept previous copy -> %s" % backup))
+        elif state != "missing":
+            os.unlink(path)
+        install_one(src, path)
+    return changed
+
+
 def _restore_paths(paths):
     """Undo an uncommitted removal in index and worktree. The tree was clean
     when it began (_removal_hold), so what differs in `paths` is ours alone."""
@@ -1699,9 +1836,13 @@ def cmd_remove(args):
     paths = ["skills.json"]
     if kind == "skill" and os.path.lexists(src):
         paths.append("skills/" + name)
+    agents = agent_files(m["skills"][name]) if kind == "skill" else []
+    paths += ["agents/" + f for f in agents if os.path.lexists(os.path.join(AGENTS_SRC, f))]
     if args.dry_run:
         what = ("drop it from skills.json, delete skills/%s, unlink %s" % (name, link)
                 if kind == "skill" else "uninstall it here, drop it from skills.json")
+        if agents:
+            what += ", delete and unlink its agents %s" % ", ".join(agents)
         print(yellow("  remove  ") + "%s %s: %s, commit and push" % (kind, name, what))
         return 0
 
@@ -1718,6 +1859,9 @@ def cmd_remove(args):
     save_manifest(m)
     if kind == "skill":
         _remove(src)
+        for f in agents:
+            if os.path.lexists(os.path.join(AGENTS_SRC, f)):
+                _remove(os.path.join(AGENTS_SRC, f))
 
     pushed = commit_and_push(paths, "Remove %s %s" % (kind, name))
     if not pushed and git("status", "--porcelain", "--", *paths):
@@ -1732,6 +1876,12 @@ def cmd_remove(args):
             os.unlink(link)
         elif os.path.exists(link):
             print(dim("          %s is a real directory, not a link; left in place" % link))
+        for f in agents:
+            # Only our own link: one into AGENTS_SRC under this name.
+            path = os.path.join(AGENTS_DIR, f)
+            if os.path.islink(path) and os.path.normpath(os.path.join(
+                    AGENTS_DIR, os.readlink(path))) == os.path.join(AGENTS_SRC, f):
+                os.unlink(path)
     else:
         recorded = recorded_mods()
         if name in recorded:
@@ -1802,6 +1952,7 @@ def cmd_sync(args):
 
     changed += sync_claude_md(args)
     changed += sync_hooks(args)
+    changed += sync_agents(args, m)
     changed += sync_mods(args, m)
 
     platform, unmanaged = extra_dirs(m["skills"])
@@ -1827,6 +1978,17 @@ def cmd_sync(args):
     return 0
 
 
+def _compare(local, up):
+    """local {rel: abs path} against up {rel: blob sha}: (modified,
+    added upstream, only local), each sorted. A file that differs only by
+    CRLF line endings (see git_blob_sha) is not modified."""
+    blobs = {rel: git_blob_sha(ap) for rel, ap in local.items()}
+    modified = sorted(k for k in blobs if k in up and blobs[k] != up[k]
+                      and git_blob_sha(local[k], crlf_to_lf=True) != up[k])
+    return (modified, sorted(k for k in up if k not in blobs),
+            sorted(k for k in blobs if k not in up))
+
+
 def _check_one(name, spec):
     """Compare vendored copy against upstream. Returns a result dict."""
     origin = spec.get("origin")
@@ -1841,12 +2003,18 @@ def _check_one(name, spec):
     except Exception as e:
         return {"name": name, "state": "error", "detail": "%s: %s" % (type(e).__name__, e)}
 
-    files = walk_files(src)
-    local = {rel: git_blob_sha(ap) for rel, ap in files.items()}
-    modified = sorted(k for k in local if k in up and local[k] != up[k]
-                      and git_blob_sha(files[k], crlf_to_lf=True) != up[k])
-    added_up = sorted(k for k in up if k not in local)
-    only_local = sorted(k for k in local if k not in up)
+    modified, added_up, only_local = _compare(walk_files(src), up)
+    a_origin = agents_origin(spec)
+    if a_origin:
+        try:
+            up_agents = upstream_files(a_origin, latest)
+        except Exception as e:
+            return {"name": name, "state": "error", "detail": "%s: %s" % (type(e).__name__, e)}
+        local_agents = {f: os.path.join(AGENTS_SRC, f) for f in agent_files(spec)
+                        if os.path.isfile(os.path.join(AGENTS_SRC, f))}
+        for into, found in zip((modified, added_up, only_local),
+                               _compare(local_agents, up_agents)):
+            into.extend("agents/" + f for f in found)
 
     same_commit = (pin == latest)
     identical = not (modified or added_up or only_local)
@@ -2022,10 +2190,21 @@ def cmd_diff(args):
         src = os.path.join(SKILLS_SRC, args.name)
         print(bold("%s: vendored (a) vs %s@%s (b)" % (args.name, origin["repo"], latest[:7])))
         print()
+        mode = "--stat" if args.stat else "--patch"
         rc = subprocess.run(
-            ["git", "diff", "--no-index", "--stat" if args.stat else "--patch",
-             src, os.path.join(tmp, args.name)],
+            ["git", "diff", "--no-index", mode, src, os.path.join(tmp, args.name)],
         ).returncode
+        a_origin = agents_origin(spec)
+        if a_origin:
+            # The declared local agents beside upstream's, so the diff sees
+            # only this skill's files, not every skill's agents/.
+            mine, theirs = os.path.join(tmp, "a", "agents"), os.path.join(tmp, "b", "agents")
+            os.makedirs(mine)
+            for f in agent_files(spec):
+                if os.path.isfile(os.path.join(AGENTS_SRC, f)):
+                    shutil.copy2(os.path.join(AGENTS_SRC, f), os.path.join(mine, f))
+            fetch_subtree(a_origin, latest, theirs)
+            rc = subprocess.run(["git", "diff", "--no-index", mode, mine, theirs]).returncode or rc
         if rc == 0:
             print(green("identical — nothing to adopt"))
     finally:
@@ -2053,8 +2232,10 @@ def vendor_one(name, spec, dry_run=False):
     old = (spec.get("pin") or {}).get("commit")
     latest = resolve_ref(origin["repo"], ref)
     if dry_run:
-        return {"old": old, "new": latest, "changed": old != latest, "files": None}
+        return {"old": old, "new": latest, "changed": old != latest, "files": None,
+                "agents": None}
     dest = os.path.join(SKILLS_SRC, name)
+    a_origin = agents_origin(spec)
     tmp = tempfile.mkdtemp(prefix="skillctl-vendor-")
     try:
         fetched = os.path.join(tmp, name)
@@ -2062,16 +2243,45 @@ def vendor_one(name, spec, dry_run=False):
         if not n:
             raise UpstreamGone("nothing at %s:%s@%s" % (
                 origin["repo"], origin.get("path", "") or "/", latest[:7]))
+        # Agents are fetched before anything moves, so a skill and its agents
+        # land together or not at all: they share one pin.
+        a_fetched, n_agents = os.path.join(tmp, "agents"), None
+        if a_origin:
+            n_agents = fetch_subtree(a_origin, latest, a_fetched)
+            if not n_agents:
+                raise UpstreamGone("nothing at %s:%s@%s" % (
+                    origin["repo"], a_origin["path"] or "/", latest[:7]))
+            # Linked one file each into a flat AGENTS_DIR; fnmatch's * also
+            # matches "/", so an include can reach into a subdirectory.
+            nested = sorted(f for f in walk_files(a_fetched) if os.sep in f)
+            if nested:
+                raise UpstreamGone("agents at %s:%s@%s are not flat files: %s" % (
+                    origin["repo"], a_origin["path"] or "/", latest[:7], ", ".join(nested)))
         before = tree_hash(dest)
         if os.path.isdir(dest):
             shutil.rmtree(dest)
         shutil.move(fetched, dest)
+        agents_changed = False
+        if a_origin:
+            old_hash = spec["agents"].get("hash")
+            for f in agent_files(spec):
+                path = os.path.join(AGENTS_SRC, f)
+                if os.path.lexists(path):
+                    os.unlink(path)
+            os.makedirs(AGENTS_SRC, exist_ok=True)
+            files = sorted(walk_files(a_fetched))
+            for f in files:
+                shutil.move(os.path.join(a_fetched, f), os.path.join(AGENTS_SRC, f))
+            spec["agents"]["files"] = files
+            spec["agents"]["hash"] = agents_hash(files)
+            agents_changed = spec["agents"]["hash"] != old_hash
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     after = tree_hash(dest)
     spec["pin"] = {"commit": latest, "ref": ref}
     spec["hash"] = after
-    return {"old": old, "new": latest, "changed": before != after, "files": n}
+    return {"old": old, "new": latest, "changed": before != after or agents_changed,
+            "files": n, "agents": n_agents}
 
 
 def cmd_vendor(args):
@@ -2328,7 +2538,11 @@ def cmd_update(args):
               "nothing pushed" % path)
         return 1
     message = "Update: %d skill(s), %d mod(s)" % (len(moved_skills), len(moved_mods))
-    if not commit_and_push(["skills.json", "skills"], message):
+    # agents/ only where some skill declares agents: `git add` of a path that
+    # does not exist fails the whole commit.
+    declares = any(s and s.get("agents") for s in m["skills"].values())
+    if not commit_and_push(["skills.json", "skills"] + (["agents"] if declares else []),
+                           message):
         return 1
     print(green("committed and pushed: ") + message)
     return status
@@ -2504,6 +2718,34 @@ def cmd_lint(args):
         for d in sorted(os.listdir(SKILLS_SRC)):
             if os.path.isdir(os.path.join(SKILLS_SRC, d)) and d not in m["skills"]:
                 errors.append((d, "present in skills/ but not declared in skills.json"))
+
+    # A skill's agents: each declared file is a well-formed agent, belongs to
+    # exactly one skill, and agents/ holds nothing no skill declares.
+    owners = {}
+    for name in sorted(m["skills"]):
+        for f in agent_files(m["skills"][name]):
+            owners.setdefault(f, []).append(name)
+    for f, names in sorted(owners.items()):
+        if len(names) > 1:
+            errors.append((f, "agent declared by more than one skill: %s" % ", ".join(names)))
+        p = os.path.join(AGENTS_SRC, f)
+        if not os.path.isfile(p):
+            errors.append((f, "agent declared by %s but missing from agents/" % names[0]))
+            continue
+        block, err = read_frontmatter(p)
+        if block is None:
+            errors.append((f, "agent %s" % err))
+            continue
+        declared, stem = fm_field(block, "name"), f[:-3] if f.endswith(".md") else f
+        if declared != stem:
+            errors.append((f, "agent frontmatter name is '%s' but the file is '%s' — "
+                              "Claude Code spawns it by its name" % (declared, stem)))
+        if not fm_field(block, "description"):
+            errors.append((f, "agent frontmatter has no `description`"))
+    if os.path.isdir(AGENTS_SRC):
+        for f in sorted(os.listdir(AGENTS_SRC)):
+            if f not in owners and f not in IGNORE:
+                errors.append((f, "present in agents/ but no skill declares it"))
 
     for n, msg in errors:
         print("  %-9s %-28s %s" % (red("error"), n, msg))
@@ -3060,6 +3302,8 @@ def _publish_tree(dest):
         src = os.path.join(REPO, rel)
         dst = os.path.join(dest, rel)
         if not os.path.exists(src):
+            if rel == "agents":
+                continue  # no skill has agents: git keeps no empty agents/
             die("publish set references %s, which does not exist" % rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         if os.path.isdir(src):
