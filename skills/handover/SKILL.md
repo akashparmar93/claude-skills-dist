@@ -49,8 +49,9 @@ Never land a *failing* test on `main`.
 1. **Read everything in one command:** the machine name, the date and time,
    `git status --short`, `git stash list`, `git branch -a`, `git log
    --oneline` since the previous handover, the previous entry alone (`sed -n
-   '/^## <its heading>/,/^## /p' <log>`), and `gh run list --limit 3`. Read
-   further only where that output points.
+   '/^## <its heading>/,/^## /p' <log>`), the file's own pending lists outside
+   its entries, and `gh run list --limit 3`. Read further only where that
+   output points.
 2. **Start the Start here block (§3) in the background**: its Every resume
    and Full tiers, verbatim, not On demand, its output to a file: the
    harness's background run, or `bash start-here.sh > start-here.out 2>&1 &`.
@@ -78,56 +79,42 @@ Find the file the project already uses — `OPEN.md`, `PROGRESS.md`, a log under
 entry's shape. §2's read gave you the previous entry. Only propose a new
 file when there is genuinely none, and ask before creating it.
 
-**If the file you would write into is loaded automatically** — `CLAUDE.md`,
-`CLAUDE.local.md`, `.claude/CLAUDE.md`, `AGENTS.md` — every byte of it is
-re-sent on every turn. The full entry goes in the project's log
-(`PROGRESS.md`, `OPEN.md`, a log under `docs/`; if there is none, create
-`docs/handover-log.md` without asking), and the handover block holds a
-short view of **only the latest entry**:
+**If the file you write into is `CLAUDE.md`, `CLAUDE.local.md`,
+`.claude/CLAUDE.md` or `AGENTS.md`**, read `auto-loaded.md` in this skill's
+directory first and follow it: it says where the full entry goes and what
+stays in that file.
 
-1. Write the full entry into the log, in the log's own order.
-2. Clear the block's older entries. One whose full version the log already
-   has is dropped. Every other one moves to the log verbatim, in the log's
-   own order (a new log keeps the order they had).
-3. Write the short view into the block: every slot as in the full entry,
-   except these:
-   - **Verified** is shorter than the log's: the machine, the date and
-     time, then `` at `<sha>` ``, the test run's result
-     (`make test` -> `Ran 31 tests ... OK`), what is broken or not
-     verified, and a pointer to the log entry, which keeps every other
-     command's result.
-   - **Landed, and why** is one line per change or decision, naming where
-     its reasons are written — the log entry, a commit, a spec or plan
-     section.
-   - **Start here**, when the block is more than five lines: the whole block
-     goes in the project's Start here file, replacing what it held —
-     `docs/start-here.md` unless the project keeps one elsewhere; create it
-     without asking. The slot is one line naming that file and its tiers.
-4. If the file has other status sections — a `## Next`, a task list, a
-   phase summary — rewrite each to the current position and pointers: the
-   phase and task now, then where the rest is written (the plan, the
-   ledger, the log). History in them (finished tasks, their dates and
-   rulings) moves to the log verbatim first, as in step 2.
+**Account for every pending item before you write.** List each item in the
+previous entry's Stops here and Next, and each item of any pending list the
+file keeps outside its entries (a "Looks finished but is not", a "Next"
+section). Then:
 
-Do it in the same commit, and say in your closing message how many entries
-moved and the file's size before and after.
+- **An item from the previous entry** goes into the new entry as exactly one
+  of: **carried**, its own line in Stops here or Next that names the item; or
+  **closed**, a line in Landed that names the item and says it is done and
+  where. A carried line shorter than the item's full text names the entry or
+  file that holds that text, and that place holds it, never another pointer:
+  `restore never rehearsed; steps in the 2026-10-10 entry`.
+- **A file-level pending list** keeps every item. An item leaves it only when
+  it is done, moved verbatim to the project's history. The entry carries one
+  line per list: its name and count (`Looks finished but is not — 5 items, 1
+  closed this session`).
+- **The closing message states the counts:** "N pending items carried, M
+  closed", plus each file-level list's count.
 
-**If the project's own instructions say to keep every entry in that file**
-(for example "add a new entry above the previous ones"), do not pick a
-side silently. Follow the rule above, and say in the closing message that
-it overrode the project's instruction, quoting it, so the owner can change
-one or the other. An instruction only to record the handover there, such as
-"record the handover under 'Current status'", is not a conflict: replacing
-the block still records it there.
+**Point, don't retell.** A fact already in a commit message, spec, plan or
+project doc gets its location in the entry, not a summary. The commit message
+stays a subject and a few lines; it is not where the cut detail goes.
+
 
 **Every entry fills these slots. A slot with nothing in it says so. A slot
 that has not changed since an earlier entry is one line naming the entry
 that holds it in full** — `Start here — unchanged since 2026-10-13 19:45` —
-the entry with the text, never one that itself points back. Stops here
-keeps its items: a carried one is one line naming the entry with its full
-text.
+the entry with the text, never one that itself points back. Stops here and
+Next are never shortened that way: they list every item, one line each.
+Every line under Landed, Stops here and Next is at most 250 bytes.
 
-- **Status** — one sentence. What is done and landed; what is not.
+- **Status** — one sentence: what is done and landed; what is not.
 - **Verified** — one line, however many commands ran, even where earlier
   entries list them: the machine by name (`scutil --get ComputerName`, or
   `hostname`), the date and time, then `` at `<sha>` `` (at least 7 hex
@@ -157,12 +144,15 @@ text.
   seen. A Start here file is those commands and comments, under 10 KB; each how-to paragraph in it moves to the project doc it
   belongs in (one that exists, or a new one under `docs/`), leaving a
   one-line pointer in its place.
-- **Landed, and why** — what changed, plus the decisions made this session and
-  their reasons. These exist nowhere else.
-- **Stops here** — what a cold reader would wrongly assume is finished. Green
-  tests over code nothing calls belong here.
-- **Next** — the first concrete action. Open questions list their options, so
-  the next session does not re-derive them.
+- **Landed, and why** — one line per change or decision, about 30 words:
+  what changed, then its reason if the reason is written nowhere else,
+  otherwise where it is written (a commit, a spec or plan section, a doc
+  section). Each item closed this session has its line here.
+- **Stops here** — one line per item a cold reader would wrongly assume is
+  finished, carried or new. Green tests over code nothing calls belong here.
+- **Next** — one line per pending action, the first concrete action first.
+  An open question keeps its options in its line, or names where they are
+  written, so the next session does not re-derive them.
 
 **The next session may be on a different machine.** It reads "this Mac", "this
 machine" or "here" as its own. So every fact that holds on one machine only —
@@ -213,6 +203,10 @@ Then end the turn, in this order:
 | `grep -v` the progress dots out of the Start here output | `cat` it whole. The filter drops result lines too. |
 | Read the log, `git log` and `git status` one by one | One command, §2 step 1. |
 | Rewrite a slot nothing changed | One line naming the entry that has it. |
+| Drop a finished item from Stops here or Next without a word | A Landed line says it is done and where. |
+| Point to the old entry instead of listing its open items | One line per item, naming it. |
+| Retell the spec, plan or `SETUP.md` in Landed | One line naming where it is written. |
+| Trim a file-level pending list to keep the file short | Every item stays until done; then it moves to history verbatim. |
 | `gh run watch` until CI finishes | Record the run id as pending; Start here checks it. |
 | Leave an untracked scratch file "for them to delete" | Commit it, delete it, or ignore it. A cold session opens a clean tree. |
 | Push the branch and stop | Merge to `main`. A branch is not a handover. |

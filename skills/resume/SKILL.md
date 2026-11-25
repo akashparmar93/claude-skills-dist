@@ -20,8 +20,14 @@ Send these together — one shell call or parallel calls, never one at a time:
 - `git fetch`, then `git status`, `git log --branches --not --remotes`,
   `git stash list`, `git branch -vv`, `git worktree list`
 - `gh pr list` and `gh issue list`
-- the latest handover entry (`PROGRESS.md`, `OPEN.md` or `CLAUDE.md`,
-  whichever the project uses)
+- from the handover file (`PROGRESS.md`, `OPEN.md` or `CLAUDE.md`,
+  whichever the project uses), never the whole file:
+  - the latest entry alone, by its heading range (`sed -n '/^## <its
+    heading>/,/^## /p' <file>`);
+  - the Start here tiers' code blocks;
+  - each pending list the file keeps outside its entries (a "Looks finished
+    but is not", a "Next"), first lines of its items only. Read an item's
+    full text only when the report or the next action needs it.
 
 Repeat the git reads for every repo the entry's Start here names.
 
@@ -57,8 +63,10 @@ issue #, local git). If `gh` failed, say GitHub was not checked.
    work.
 2. **Waiting on you** — questions only the user can answer; their answers
    change what is next.
-3. **Looks done but isn't** — from Stops here.
-4. **Next** — the entry's next actions in its order, then open PRs and issues.
+3. **Looks done but isn't** — from Stops here, then each file-level pending
+   list's items (§1).
+4. **Next** — the entry's next actions in its order, then a file-level Next
+   list's items, then open PRs and issues.
 
 ## 5. Start here: run it or offer it
 
